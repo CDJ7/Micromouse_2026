@@ -1,0 +1,292 @@
+#include "solver.h"
+#include "API.h"
+
+/*
+ * Micromouse solver
+ * -----------------
+ * solver() is called once per step and must return ONE action, so the whole
+ * strategy is a state machine that keeps its state in static variables.
+ *
+ * Phases:
+ *   SEARCH  flood fill toward the centre, mapping walls as we go
+ *   REFINE  keep exploring only the cells that could lead to a faster route,
+ *           until the best route (fewest turns) is made entirely of cells we
+ *           have actually visited
+ *   RETURN  flood fill back to the start cell (0,0)
+ *   ALIGN   turn to face north at the start
+ *   RUN     drive the pre-computed fastest route to the centre
+ *
+ * "Fastest" = lowest cost, where one forward move costs MM_STEP_COST and one
+ * 90-degree turn costs MM_TURN_COST. Raise MM_TURN_COST if your mouse loses
+ * more time in turns, lower it if turns are cheap.
+ *
+ * Assumptions (change here if your simulator differs):
+ *   - 16x16 maze, mouse starts in the bottom-left cell (0,0) facing north.
+ *   - Goal is the 2x2 block in the middle.
+ *   - FORWARD moves exactly one cell; LEFT/RIGHT turn 90 degrees in place.
+ */
+
+#define MM_SIZE        16
+#define MM_STEP_COST   1
+#define MM_TURN_COST   3
+#define MM_INF         1000000
+
+enum { MM_NORTH = 0, MM_EAST = 1, MM_SOUTH = 2, MM_WEST = 3 };
+enum { PH_SEARCH, PH_REFINE, PH_RETURN, PH_ALIGN, PH_RUN, PH_DONE };
+
+#define MM_NSTATE (MM_SIZE * MM_SIZE * 4)
+
+static const int DX[4] = { 0, 1, 0, -1 };
+static const int DY[4] = { 1, 0, -1, 0 };
+
+/* ---- map knowledge ---- */
+static int wallMap[MM_SIZE][MM_SIZE][4];  /* 1 = wall known. Unknown counts as open. */
+static int visited[MM_SIZE][MM_SIZE];     /* 1 = we stood here, so all 4 walls are known */
+
+/* ---- mouse state ---- */
+static int px, py, heading;
+static int phase;
+static int initDone = 0;
+
+/* ---- refine target ---- */
+static int hasTarget = 0, targetX, targetY;
+
+/* ---- planned route for the final run ---- */
+static Action plan[MM_NSTATE];
+static int planLen, planPos;
+static int planUnvX, planUnvY;  /* first unvisited cell on the last planned route, -1 if none */
+
+/* ------------------------------------------------------------------ */
+/* helpers                                                             */
+/* ------------------------------------------------------------------ */
+
+static int inBounds(int x, int y) {
+    return x >= 0 && y >= 0 && x < MM_SIZE && y < MM_SIZE;
+}
+
+static int isGoal(int x, int y) {
+    int lo = MM_SIZE / 2 - 1, hi = MM_SIZE / 2;
+    return (x == lo || x == hi) && (y == lo || y == hi);
+}
+
+static void setWall(int x, int y, int d, int val) {
+    int nx = x + DX[d], ny = y + DY[d];
+    wallMap[x][y][d] = val;
+    if (inBounds(nx, ny)) wallMap[nx][ny][(d + 2) % 4] = val;
+}
+
+static void initMap(void) {
+    int i, j, d;
+    for (i = 0; i < MM_SIZE; i++)
+        for (j = 0; j < MM_SIZE; j++) {
+            visited[i][j] = 0;
+            for (d = 0; d < 4; d++) wallMap[i][j][d] = 0;
+        }
+    for (i = 0; i < MM_SIZE; i++) {
+        wallMap[i][0][MM_SOUTH] = 1;
+        wallMap[i][MM_SIZE - 1][MM_NORTH] = 1;
+        wallMap[0][i][MM_WEST] = 1;
+        wallMap[MM_SIZE - 1][i][MM_EAST] = 1;
+    }
+}
+
+/* Read the three sensors and record the walls around the current cell. */
+static void senseWalls(void) {
+    int front = API_wallFront() != 0;
+    int left  = API_wallLeft()  != 0;
+    int right = API_wallRight() != 0;
+    setWall(px, py, heading, front);
+    setWall(px, py, (heading + 3) % 4, left);
+    setWall(px, py, (heading + 1) % 4, right);
+    visited[px][py] = 1;
+}
+
+/* Breadth-first flood fill from the target cells over the known walls. */
+static void flood(const int tx[], const int ty[], int nt, int dist[MM_SIZE][MM_SIZE]) {
+    static int qx[MM_SIZE * MM_SIZE], qy[MM_SIZE * MM_SIZE];
+    int head = 0, tail = 0, i, j, d;
+    for (i = 0; i < MM_SIZE; i++)
+        for (j = 0; j < MM_SIZE; j++) dist[i][j] = MM_INF;
+    for (i = 0; i < nt; i++) {
+        dist[tx[i]][ty[i]] = 0;
+        qx[tail] = tx[i]; qy[tail] = ty[i]; tail++;
+    }
+    while (head < tail) {
+        int x = qx[head], y = qy[head]; head++;
+        for (d = 0; d < 4; d++) {
+            int nx = x + DX[d], ny = y + DY[d];
+            if (wallMap[x][y][d] || !inBounds(nx, ny)) continue;
+            if (dist[nx][ny] != MM_INF) continue;
+            dist[nx][ny] = dist[x][y] + 1;
+            qx[tail] = nx; qy[tail] = ny; tail++;
+        }
+    }
+}
+
+/* Best direction to step in: lowest flood value, ties broken toward going straight. */
+static int pickDirection(int dist[MM_SIZE][MM_SIZE]) {
+    int order[4], k, best = -1, bestD = MM_INF;
+    order[0] = heading;
+    order[1] = (heading + 1) % 4;
+    order[2] = (heading + 3) % 4;
+    order[3] = (heading + 2) % 4;
+    for (k = 0; k < 4; k++) {
+        int d = order[k], nx = px + DX[d], ny = py + DY[d];
+        if (wallMap[px][py][d] || !inBounds(nx, ny)) continue;
+        if (dist[nx][ny] < bestD) { bestD = dist[nx][ny]; best = d; }
+    }
+    if (best >= 0 && bestD < dist[px][py]) return best;
+    return -1;
+}
+
+/* Turn toward direction d, or move forward if already facing it. Updates our tracked pose. */
+static Action stepToward(int d) {
+    int diff = (d - heading + 4) % 4;
+    if (diff == 0) { px += DX[d]; py += DY[d]; return FORWARD; }
+    if (diff == 3) { heading = (heading + 3) % 4; return LEFT; }
+    heading = (heading + 1) % 4;          /* diff 1, or the first half of a U-turn */
+    return RIGHT;
+}
+
+/* ------------------------------------------------------------------ */
+/* Fastest-route planner (Dijkstra over cell + heading)                */
+/* Turns cost more than straight moves, so fewer turns = cheaper path. */
+/* onlyVisited=1 restricts the route to cells we have really visited.  */
+/* ------------------------------------------------------------------ */
+
+static int planPath(int onlyVisited, int sx, int sy, int sh) {
+    static int dist[MM_NSTATE], prev[MM_NSTATE], done[MM_NSTATE], chain[MM_NSTATE];
+    static Action pact[MM_NSTATE];
+    int i, s, goalState = -1, n;
+
+    for (i = 0; i < MM_NSTATE; i++) { dist[i] = MM_INF; prev[i] = -1; done[i] = 0; }
+    s = (sx * MM_SIZE + sy) * 4 + sh;
+    dist[s] = 0;
+
+    for (;;) {
+        int u = -1, best = MM_INF, d, c, x, y, v;
+        for (i = 0; i < MM_NSTATE; i++)
+            if (!done[i] && dist[i] < best) { best = dist[i]; u = i; }
+        if (u < 0) break;
+        done[u] = 1;
+        d = u % 4; c = u / 4; x = c / MM_SIZE; y = c % MM_SIZE;
+        if (isGoal(x, y)) { goalState = u; break; }
+
+        if (!wallMap[x][y][d]) {
+            int nx = x + DX[d], ny = y + DY[d];
+            if (inBounds(nx, ny) && (!onlyVisited || visited[nx][ny])) {
+                v = (nx * MM_SIZE + ny) * 4 + d;
+                if (dist[u] + MM_STEP_COST < dist[v]) {
+                    dist[v] = dist[u] + MM_STEP_COST; prev[v] = u; pact[v] = FORWARD;
+                }
+            }
+        }
+        v = c * 4 + (d + 1) % 4;
+        if (dist[u] + MM_TURN_COST < dist[v]) {
+            dist[v] = dist[u] + MM_TURN_COST; prev[v] = u; pact[v] = RIGHT;
+        }
+        v = c * 4 + (d + 3) % 4;
+        if (dist[u] + MM_TURN_COST < dist[v]) {
+            dist[v] = dist[u] + MM_TURN_COST; prev[v] = u; pact[v] = LEFT;
+        }
+    }
+    if (goalState < 0) return 0;
+
+    /* walk back from the goal to the start */
+    n = 0;
+    for (i = goalState; i != s; i = prev[i]) chain[n++] = i;
+    chain[n] = s;
+    planLen = n;
+    planUnvX = planUnvY = -1;
+    for (i = 0; i < n; i++) {
+        int st = chain[n - 1 - i];                 /* state reached by action i */
+        int c = st / 4, x = c / MM_SIZE, y = c % MM_SIZE;
+        plan[i] = pact[st];
+        if (planUnvX < 0 && !visited[x][y]) { planUnvX = x; planUnvY = y; }
+    }
+    return 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* Main strategy                                                       */
+/* ------------------------------------------------------------------ */
+
+Action solver() {
+    return floodFill();
+}
+
+// This is an example of a simple left wall following algorithm.
+Action leftWallFollower() {
+    if(API_wallFront()) {
+        if(API_wallLeft()){
+            return RIGHT;
+        }
+        return LEFT;
+    }
+    return FORWARD;
+}
+
+Action floodFill() {
+    static int dist[MM_SIZE][MM_SIZE];
+    int gx[4], gy[4], d;
+
+    if (!initDone) {
+        initMap();
+        px = 0; py = 0; heading = MM_NORTH;
+        phase = PH_SEARCH;
+        initDone = 1;
+    }
+    if (phase == PH_SEARCH || phase == PH_REFINE || phase == PH_RETURN) senseWalls();
+
+    for (;;) {
+        switch (phase) {
+
+        case PH_SEARCH:
+            if (isGoal(px, py)) { phase = PH_REFINE; hasTarget = 0; continue; }
+            gx[0] = MM_SIZE / 2 - 1; gy[0] = MM_SIZE / 2 - 1;
+            gx[1] = MM_SIZE / 2 - 1; gy[1] = MM_SIZE / 2;
+            gx[2] = MM_SIZE / 2;     gy[2] = MM_SIZE / 2 - 1;
+            gx[3] = MM_SIZE / 2;     gy[3] = MM_SIZE / 2;
+            flood(gx, gy, 4, dist);
+            d = pickDirection(dist);
+            if (d < 0) return IDLE;
+            return stepToward(d);
+
+        case PH_REFINE:
+            if (!hasTarget) {
+                /* best route if every unexplored cell were open */
+                if (!planPath(0, 0, 0, MM_NORTH) || planUnvX < 0) { phase = PH_RETURN; continue; }
+                targetX = planUnvX; targetY = planUnvY; hasTarget = 1;
+            }
+            if (px == targetX && py == targetY) { hasTarget = 0; continue; }
+            gx[0] = targetX; gy[0] = targetY;
+            flood(gx, gy, 1, dist);
+            d = pickDirection(dist);
+            if (d < 0) { phase = PH_RETURN; continue; }
+            return stepToward(d);
+
+        case PH_RETURN:
+            if (px == 0 && py == 0) { phase = PH_ALIGN; continue; }
+            gx[0] = 0; gy[0] = 0;
+            flood(gx, gy, 1, dist);
+            d = pickDirection(dist);
+            if (d < 0) return IDLE;
+            return stepToward(d);
+
+        case PH_ALIGN:
+            if (heading != MM_NORTH) return stepToward(MM_NORTH);
+            if (!planPath(1, 0, 0, MM_NORTH)) { phase = PH_DONE; continue; }
+            planPos = 0;
+            phase = PH_RUN;
+            continue;
+
+        case PH_RUN:
+            if (planPos < planLen) return plan[planPos++];
+            phase = PH_DONE;
+            continue;
+
+        default:
+            return IDLE;
+        }
+    }
+}
