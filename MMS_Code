@@ -2,223 +2,301 @@
 #include "API.h"
 
 /*
- * Micromouse solver
- * -----------------
- * solver() is called once per step and must return ONE action, so the whole
- * strategy is a state machine that keeps its state in static variables.
+ * Micromouse solver (score-optimised)
+ * -----------------------------------
+ * MMS score (verified against the Stats tab: 100 + 52 + (520 + 318) / 10 = 235.8):
  *
- * Phases:
- *   SEARCH  flood fill toward the centre, mapping walls as we go
- *   REFINE  keep exploring only the cells that could lead to a faster route,
- *           until the best route (fewest turns) is made entirely of cells we
- *           have actually visited
- *   RETURN  flood fill back to the start cell (0,0)
- *   ALIGN   turn to face north at the start
- *   RUN     drive the pre-computed fastest route to the centre
+ *     score = bestRunDistance + bestRunTurns + (totalDistance + totalTurns) / 10
  *
- * "Fastest" = lowest cost, where one forward move costs MM_STEP_COST and one
- * 90-degree turn costs MM_TURN_COST. Raise MM_TURN_COST if your mouse loses
- * more time in turns, lower it if turns are cheap.
+ * A step and a turn cost the same, and every action spent searching costs 0.1.
  *
- * Assumptions (change here if your simulator differs):
- *   - 16x16 maze, mouse starts in the bottom-left cell (0,0) facing north.
- *   - Goal is the 2x2 block in the middle.
- *   - FORWARD moves exactly one cell; LEFT/RIGHT turn 90 degrees in place.
+ * Strategy
+ *   EXPLORE  plan the cheapest route start -> centre assuming unknown walls
+ *            are open (ties broken towards already-known edges). If every
+ *            edge of that route is known, the route is proven optimal. If not,
+ *            drive to the nearest cell touching an unknown edge on it (arriving
+ *            in a cell reveals all of its walls) and re-plan.
+ *   RETURN   pick the arrival heading at the start that minimises
+ *            10 * runCost + returnCost, then queue return + final run.
+ *   PLAY     replay the queued actions; the last part is the optimal run.
+ *
+ * Planning is Dijkstra over (cell, heading) so turns are priced exactly.
+ * Knowledge is per EDGE, so a cell on the route does not have to be fully
+ * resolved, only the edges the route actually uses.
+ *
+ * TUNING
+ *   MM_MARGIN  stop exploring once the best fully-known route is within this
+ *              many actions of the optimistic bound. 0 = prove optimality.
+ *   MM_SIZE    16 for the simulator, 10 for the real maze (centre moves too).
  */
 
-#define MM_SIZE        16
-#define MM_STEP_COST   1
-#define MM_TURN_COST   3
-#define MM_INF         1000000
+#define MM_SIZE    16
+#ifndef MM_MARGIN
+#define MM_MARGIN  0
+#endif
+
+#define MM_NCELL   (MM_SIZE * MM_SIZE)
+#define MM_NSTATE  (MM_NCELL * 4)
+#define MM_SCALE   4096          /* one action; the unknown-edge tie-break is 1 */
+#define MM_INF     0x3fffffff
 
 enum { MM_NORTH = 0, MM_EAST = 1, MM_SOUTH = 2, MM_WEST = 3 };
-enum { PH_SEARCH, PH_REFINE, PH_RETURN, PH_ALIGN, PH_RUN, PH_DONE };
-
-#define MM_NSTATE (MM_SIZE * MM_SIZE * 4)
+enum { PH_EXPLORE, PH_RETURN, PH_PLAY };
 
 static const int DX[4] = { 0, 1, 0, -1 };
 static const int DY[4] = { 1, 0, -1, 0 };
 
-/* ---- map knowledge ---- */
-static int wallMap[MM_SIZE][MM_SIZE][4];  /* 1 = wall known. Unknown counts as open. */
-static int visited[MM_SIZE][MM_SIZE];     /* 1 = we stood here, so all 4 walls are known */
+/* ---- map knowledge, indexed [cell][side] ---- */
+static unsigned char wallMap[MM_NCELL][4];   /* 1 = wall */
+static unsigned char known[MM_NCELL][4];     /* 1 = side known for sure */
 
 /* ---- mouse state ---- */
 static int px, py, heading;
 static int phase;
 static int initDone = 0;
 
-/* ---- refine target ---- */
-static int hasTarget = 0, targetX, targetY;
+/* ---- queued actions (return + final run) ---- */
+static Action queue[MM_NSTATE * 2];
+static int qLen, qPos;
 
-/* ---- planned route for the final run ---- */
-static Action plan[MM_NSTATE];
-static int planLen, planPos;
-static int planUnvX, planUnvY;  /* first unvisited cell on the last planned route, -1 if none */
+/* ---- planner scratch ---- */
+static int dist[MM_NSTATE], prevS[MM_NSTATE];
+static Action pact[MM_NSTATE];
+static int chain[MM_NSTATE];
+static unsigned char mark[MM_NCELL];
+
+typedef struct { int key, st; } HNode;
+static HNode heap[MM_NSTATE * 3 + 8];
+static int hn;
 
 /* ------------------------------------------------------------------ */
-/* helpers                                                             */
+/* map helpers                                                         */
 /* ------------------------------------------------------------------ */
 
 static int inBounds(int x, int y) {
     return x >= 0 && y >= 0 && x < MM_SIZE && y < MM_SIZE;
 }
 
-static int isGoal(int x, int y) {
-    int lo = MM_SIZE / 2 - 1, hi = MM_SIZE / 2;
-    return (x == lo || x == hi) && (y == lo || y == hi);
-}
 
 static void setWall(int x, int y, int d, int val) {
     int nx = x + DX[d], ny = y + DY[d];
-    wallMap[x][y][d] = val;
-    if (inBounds(nx, ny)) wallMap[nx][ny][(d + 2) % 4] = val;
+    wallMap[x * MM_SIZE + y][d] = (unsigned char)val;
+    known[x * MM_SIZE + y][d] = 1;
+    if (inBounds(nx, ny)) {
+        wallMap[nx * MM_SIZE + ny][(d + 2) % 4] = (unsigned char)val;
+        known[nx * MM_SIZE + ny][(d + 2) % 4] = 1;
+    }
 }
 
 static void initMap(void) {
-    int i, j, d;
-    for (i = 0; i < MM_SIZE; i++)
-        for (j = 0; j < MM_SIZE; j++) {
-            visited[i][j] = 0;
-            for (d = 0; d < 4; d++) wallMap[i][j][d] = 0;
-        }
+    int i, d;
+    for (i = 0; i < MM_NCELL; i++)
+        for (d = 0; d < 4; d++) { wallMap[i][d] = 0; known[i][d] = 0; }
     for (i = 0; i < MM_SIZE; i++) {
-        wallMap[i][0][MM_SOUTH] = 1;
-        wallMap[i][MM_SIZE - 1][MM_NORTH] = 1;
-        wallMap[0][i][MM_WEST] = 1;
-        wallMap[MM_SIZE - 1][i][MM_EAST] = 1;
+        setWall(i, 0, MM_SOUTH, 1);
+        setWall(i, MM_SIZE - 1, MM_NORTH, 1);
+        setWall(0, i, MM_WEST, 1);
+        setWall(MM_SIZE - 1, i, MM_EAST, 1);
     }
 }
 
-/* Read the three sensors and record the walls around the current cell. */
 static void senseWalls(void) {
-    int front = API_wallFront() != 0;
-    int left  = API_wallLeft()  != 0;
-    int right = API_wallRight() != 0;
-    setWall(px, py, heading, front);
-    setWall(px, py, (heading + 3) % 4, left);
-    setWall(px, py, (heading + 1) % 4, right);
-    visited[px][py] = 1;
+    int c = px * MM_SIZE + py, back = (heading + 2) % 4;
+    setWall(px, py, heading, API_wallFront() != 0);
+    setWall(px, py, (heading + 3) % 4, API_wallLeft() != 0);
+    setWall(px, py, (heading + 1) % 4, API_wallRight() != 0);
+    if (!known[c][back]) setWall(px, py, back, 0);   /* we came through it */
 }
 
-/* Breadth-first flood fill from the target cells over the known walls. */
-static void flood(const int tx[], const int ty[], int nt, int dist[MM_SIZE][MM_SIZE]) {
-    static int qx[MM_SIZE * MM_SIZE], qy[MM_SIZE * MM_SIZE];
-    int head = 0, tail = 0, i, j, d;
-    for (i = 0; i < MM_SIZE; i++)
-        for (j = 0; j < MM_SIZE; j++) dist[i][j] = MM_INF;
-    for (i = 0; i < nt; i++) {
-        dist[tx[i]][ty[i]] = 0;
-        qx[tail] = tx[i]; qy[tail] = ty[i]; tail++;
-    }
-    while (head < tail) {
-        int x = qx[head], y = qy[head]; head++;
-        for (d = 0; d < 4; d++) {
-            int nx = x + DX[d], ny = y + DY[d];
-            if (wallMap[x][y][d] || !inBounds(nx, ny)) continue;
-            if (dist[nx][ny] != MM_INF) continue;
-            dist[nx][ny] = dist[x][y] + 1;
-            qx[tail] = nx; qy[tail] = ny; tail++;
-        }
-    }
-}
-
-/* Best direction to step in: lowest flood value, ties broken toward going straight. */
-static int pickDirection(int dist[MM_SIZE][MM_SIZE]) {
-    int order[4], k, best = -1, bestD = MM_INF;
-    order[0] = heading;
-    order[1] = (heading + 1) % 4;
-    order[2] = (heading + 3) % 4;
-    order[3] = (heading + 2) % 4;
-    for (k = 0; k < 4; k++) {
-        int d = order[k], nx = px + DX[d], ny = py + DY[d];
-        if (wallMap[px][py][d] || !inBounds(nx, ny)) continue;
-        if (dist[nx][ny] < bestD) { bestD = dist[nx][ny]; best = d; }
-    }
-    if (best >= 0 && bestD < dist[px][py]) return best;
-    return -1;
-}
-
-/* Turn toward direction d, or move forward if already facing it. Updates our tracked pose. */
-static Action stepToward(int d) {
-    int diff = (d - heading + 4) % 4;
-    if (diff == 0) { px += DX[d]; py += DY[d]; return FORWARD; }
-    if (diff == 3) { heading = (heading + 3) % 4; return LEFT; }
-    heading = (heading + 1) % 4;          /* diff 1, or the first half of a U-turn */
-    return RIGHT;
+static Action apply(Action a) {
+    if (a == FORWARD) { px += DX[heading]; py += DY[heading]; }
+    else if (a == RIGHT) heading = (heading + 1) % 4;
+    else if (a == LEFT)  heading = (heading + 3) % 4;
+    return a;
 }
 
 /* ------------------------------------------------------------------ */
-/* Fastest-route planner (Dijkstra over cell + heading)                */
-/* Turns cost more than straight moves, so fewer turns = cheaper path. */
-/* onlyVisited=1 restricts the route to cells we have really visited.  */
+/* Dijkstra over (cell, heading)                                       */
 /* ------------------------------------------------------------------ */
 
-static int planPath(int onlyVisited, int sx, int sy, int sh) {
-    static int dist[MM_NSTATE], prev[MM_NSTATE], done[MM_NSTATE], chain[MM_NSTATE];
-    static Action pact[MM_NSTATE];
-    int i, s, goalState = -1, n;
+static void hpush(int key, int st) {
+    int i = hn++;
+    while (i > 0) {
+        int p = (i - 1) >> 1;
+        if (heap[p].key <= key) break;
+        heap[i] = heap[p];
+        i = p;
+    }
+    heap[i].key = key; heap[i].st = st;
+}
 
-    for (i = 0; i < MM_NSTATE; i++) { dist[i] = MM_INF; prev[i] = -1; done[i] = 0; }
-    s = (sx * MM_SIZE + sy) * 4 + sh;
-    dist[s] = 0;
-
+static HNode hpop(void) {
+    HNode top = heap[0], last = heap[--hn];
+    int i = 0;
     for (;;) {
-        int u = -1, best = MM_INF, d, c, x, y, v;
-        for (i = 0; i < MM_NSTATE; i++)
-            if (!done[i] && dist[i] < best) { best = dist[i]; u = i; }
-        if (u < 0) break;
-        done[u] = 1;
-        d = u % 4; c = u / 4; x = c / MM_SIZE; y = c % MM_SIZE;
-        if (isGoal(x, y)) { goalState = u; break; }
-
-        if (!wallMap[x][y][d]) {
-            int nx = x + DX[d], ny = y + DY[d];
-            if (inBounds(nx, ny) && (!onlyVisited || visited[nx][ny])) {
-                v = (nx * MM_SIZE + ny) * 4 + d;
-                if (dist[u] + MM_STEP_COST < dist[v]) {
-                    dist[v] = dist[u] + MM_STEP_COST; prev[v] = u; pact[v] = FORWARD;
-                }
-            }
-        }
-        v = c * 4 + (d + 1) % 4;
-        if (dist[u] + MM_TURN_COST < dist[v]) {
-            dist[v] = dist[u] + MM_TURN_COST; prev[v] = u; pact[v] = RIGHT;
-        }
-        v = c * 4 + (d + 3) % 4;
-        if (dist[u] + MM_TURN_COST < dist[v]) {
-            dist[v] = dist[u] + MM_TURN_COST; prev[v] = u; pact[v] = LEFT;
-        }
+        int c = 2 * i + 1;
+        if (c >= hn) break;
+        if (c + 1 < hn && heap[c + 1].key < heap[c].key) c++;
+        if (heap[c].key >= last.key) break;
+        heap[i] = heap[c];
+        i = c;
     }
-    if (goalState < 0) return 0;
+    heap[i] = last;
+    return top;
+}
 
-    /* walk back from the goal to the start */
-    n = 0;
-    for (i = goalState; i != s; i = prev[i]) chain[n++] = i;
-    chain[n] = s;
-    planLen = n;
-    planUnvX = planUnvY = -1;
-    for (i = 0; i < n; i++) {
-        int st = chain[n - 1 - i];                 /* state reached by action i */
-        int c = st / 4, x = c / MM_SIZE, y = c % MM_SIZE;
-        plan[i] = pact[st];
-        if (planUnvX < 0 && !visited[x][y]) { planUnvX = x; planUnvY = y; }
+static void relax(int v, int nd, int u, Action a) {
+    if (nd < dist[v]) { dist[v] = nd; prevS[v] = u; pact[v] = a; hpush(nd, v); }
+}
+
+/* knownOnly=0: unknown edges count as open, costing +1 so ties prefer known.
+ * knownOnly=1: only edges known to be open may be used. */
+static void dijkstra(int sx, int sy, int sh, int knownOnly) {
+    int i, s = (sx * MM_SIZE + sy) * 4 + sh;
+    for (i = 0; i < MM_NSTATE; i++) { dist[i] = MM_INF; prevS[i] = -1; }
+    hn = 0;
+    dist[s] = 0;
+    hpush(0, s);
+    while (hn > 0) {
+        HNode t = hpop();
+        int u = t.st, d = u & 3, c = u >> 2;
+        if (t.key > dist[u]) continue;
+        if (!wallMap[c][d] && (!knownOnly || known[c][d])) {
+            int nx = c / MM_SIZE + DX[d], ny = c % MM_SIZE + DY[d];
+            relax((nx * MM_SIZE + ny) * 4 + d,
+                  dist[u] + MM_SCALE + (known[c][d] ? 0 : 1), u, FORWARD);
+        }
+        relax(c * 4 + ((d + 1) & 3), dist[u] + MM_SCALE, u, RIGHT);
+        relax(c * 4 + ((d + 3) & 3), dist[u] + MM_SCALE, u, LEFT);
     }
-    return 1;
+}
+
+/* cheapest state (any heading) at a cell, or -1 if unreachable */
+static int bestStateAt(int c) {
+    int h, best = -1, bc = MM_INF;
+    for (h = 0; h < 4; h++)
+        if (dist[c * 4 + h] < bc) { bc = dist[c * 4 + h]; best = c * 4 + h; }
+    return best;
+}
+
+static int bestGoalState(void) {
+    int lo = MM_SIZE / 2 - 1, hi = MM_SIZE / 2, x, y, best = -1, bc = MM_INF;
+    for (x = lo; x <= hi; x++)
+        for (y = lo; y <= hi; y++) {
+            int st = bestStateAt(x * MM_SIZE + y);
+            if (st >= 0 && dist[st] < bc) { bc = dist[st]; best = st; }
+        }
+    return best;
+}
+
+/* states from s (exclusive) to g, stored backwards in chain[] */
+static int chainOf(int g, int s) {
+    int n = 0, i;
+    for (i = g; i != s; i = prevS[i]) chain[n++] = i;
+    return n;
+}
+
+static void enqueuePath(int g, int s) {
+    int n = chainOf(g, s), k;
+    for (k = n - 1; k >= 0; k--) queue[qLen++] = pact[chain[k]];
 }
 
 /* ------------------------------------------------------------------ */
 /* Main strategy                                                       */
 /* ------------------------------------------------------------------ */
 
-Action solver() {
-    return floodFill();
+Action floodFill(void) {
+    if (!initDone) {
+        initMap();
+        px = 0; py = 0; heading = MM_NORTH;
+        phase = PH_EXPLORE;
+        initDone = 1;
+    }
+    if (phase == PH_EXPLORE) senseWalls();
+
+    for (;;) {
+        switch (phase) {
+
+        case PH_EXPLORE: {
+            int g, n, k, any = 0, best = -1, bestCost = MM_INF, cur, optBase;
+            /* optimistic bound from the start */
+            dijkstra(0, 0, MM_NORTH, 0);
+            g = bestGoalState();
+            if (g < 0) { phase = PH_RETURN; continue; }
+            optBase = dist[g] / MM_SCALE;
+            n = chainOf(g, MM_NORTH);
+            for (k = 0; k < MM_NCELL; k++) mark[k] = 0;
+            for (k = 0; k < n; k++) {
+                int st = chain[k];
+                if (pact[st] == FORWARD) {
+                    int u = prevS[st], c = u >> 2, d = u & 3;
+                    if (!known[c][d]) {
+                        mark[c] = 1;
+                        mark[(c / MM_SIZE + DX[d]) * MM_SIZE + c % MM_SIZE + DY[d]] = 1;
+                        any = 1;
+                    }
+                }
+            }
+            if (!any) { phase = PH_RETURN; continue; }
+            if (MM_MARGIN > 0) {
+                int kg;
+                dijkstra(0, 0, MM_NORTH, 1);
+                kg = bestGoalState();
+                if (kg >= 0 && dist[kg] / MM_SCALE - optBase <= MM_MARGIN) { phase = PH_RETURN; continue; }
+            }
+            /* nearest marked cell from where we are */
+            dijkstra(px, py, heading, 0);
+            for (k = 0; k < MM_NCELL; k++) {
+                int st;
+                if (!mark[k]) continue;
+                st = bestStateAt(k);
+                if (st >= 0 && dist[st] < bestCost) { bestCost = dist[st]; best = st; }
+            }
+            cur = (px * MM_SIZE + py) * 4 + heading;
+            if (best < 0 || best == cur) { phase = PH_RETURN; continue; }
+            n = chainOf(best, cur);
+            return apply(pact[chain[n - 1]]);
+        }
+
+        case PH_RETURN: {
+            int h, bh = -1, bestTotal = MM_INF, cur = (px * MM_SIZE + py) * 4 + heading;
+            int ret[4];
+            dijkstra(px, py, heading, 1);
+            for (h = 0; h < 4; h++) ret[h] = dist[h];          /* cell (0,0) */
+            for (h = 0; h < 4; h++) {
+                int gs, total;
+                if (ret[h] >= MM_INF) continue;
+                dijkstra(0, 0, h, 1);
+                gs = bestGoalState();
+                if (gs < 0) continue;
+                /* run counts 1, everything else 0.1 */
+                total = (dist[gs] / MM_SCALE) * 10 + ret[h] / MM_SCALE;
+                if (total < bestTotal) { bestTotal = total; bh = h; }
+            }
+            qLen = qPos = 0;
+            if (bh >= 0) {
+                int gs;
+                dijkstra(px, py, heading, 1);
+                enqueuePath(bh, cur);
+                dijkstra(0, 0, bh, 1);
+                gs = bestGoalState();
+                enqueuePath(gs, bh);
+            }
+            phase = PH_PLAY;
+            continue;
+        }
+
+        default:
+            if (qPos < qLen) return queue[qPos++];
+            return IDLE;
+        }
+    }
 }
 
 // This is an example of a simple left wall following algorithm.
-Action leftWallFollower() {
-    if(API_wallFront()) {
-        if(API_wallLeft()){
+Action leftWallFollower(void) {
+    if (API_wallFront()) {
+        if (API_wallLeft()) {
             return RIGHT;
         }
         return LEFT;
@@ -226,67 +304,6 @@ Action leftWallFollower() {
     return FORWARD;
 }
 
-Action floodFill() {
-    static int dist[MM_SIZE][MM_SIZE];
-    int gx[4], gy[4], d;
-
-    if (!initDone) {
-        initMap();
-        px = 0; py = 0; heading = MM_NORTH;
-        phase = PH_SEARCH;
-        initDone = 1;
-    }
-    if (phase == PH_SEARCH || phase == PH_REFINE || phase == PH_RETURN) senseWalls();
-
-    for (;;) {
-        switch (phase) {
-
-        case PH_SEARCH:
-            if (isGoal(px, py)) { phase = PH_REFINE; hasTarget = 0; continue; }
-            gx[0] = MM_SIZE / 2 - 1; gy[0] = MM_SIZE / 2 - 1;
-            gx[1] = MM_SIZE / 2 - 1; gy[1] = MM_SIZE / 2;
-            gx[2] = MM_SIZE / 2;     gy[2] = MM_SIZE / 2 - 1;
-            gx[3] = MM_SIZE / 2;     gy[3] = MM_SIZE / 2;
-            flood(gx, gy, 4, dist);
-            d = pickDirection(dist);
-            if (d < 0) return IDLE;
-            return stepToward(d);
-
-        case PH_REFINE:
-            if (!hasTarget) {
-                /* best route if every unexplored cell were open */
-                if (!planPath(0, 0, 0, MM_NORTH) || planUnvX < 0) { phase = PH_RETURN; continue; }
-                targetX = planUnvX; targetY = planUnvY; hasTarget = 1;
-            }
-            if (px == targetX && py == targetY) { hasTarget = 0; continue; }
-            gx[0] = targetX; gy[0] = targetY;
-            flood(gx, gy, 1, dist);
-            d = pickDirection(dist);
-            if (d < 0) { phase = PH_RETURN; continue; }
-            return stepToward(d);
-
-        case PH_RETURN:
-            if (px == 0 && py == 0) { phase = PH_ALIGN; continue; }
-            gx[0] = 0; gy[0] = 0;
-            flood(gx, gy, 1, dist);
-            d = pickDirection(dist);
-            if (d < 0) return IDLE;
-            return stepToward(d);
-
-        case PH_ALIGN:
-            if (heading != MM_NORTH) return stepToward(MM_NORTH);
-            if (!planPath(1, 0, 0, MM_NORTH)) { phase = PH_DONE; continue; }
-            planPos = 0;
-            phase = PH_RUN;
-            continue;
-
-        case PH_RUN:
-            if (planPos < planLen) return plan[planPos++];
-            phase = PH_DONE;
-            continue;
-
-        default:
-            return IDLE;
-        }
-    }
+Action solver() {
+    return floodFill();
 }
