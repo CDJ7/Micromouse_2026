@@ -34,7 +34,6 @@ The aim is the best possible mms score, not just reaching the center. The score 
 The aim is the best mms score, not just reaching the center. The official score (lower is better) is:
 
 ```
-score = bestRunDistance + bestRunTurns + (totalDistance + totalTurns) / 10
 score = best run turns + best run effective distance + 0.1 × (total turns + total effective distance)
 ```
 
@@ -74,11 +73,10 @@ The solver is intended to expose two tunable settings:
 
 | File | Description |
 | --- | --- |
-| `MMS_Code` | The C solver source used in mms: route planning, the three-phase strategy and the entry point. |
-| `MMS_Code` | The C solver source: route planning, the three-phase strategy and the solver entry point. It also includes a simple left-wall follower as a reference example. |
+| `MMS_Code` | The core of the project: route planning and the three-phase strategy (explore, return, final run).|
 | `README.md` | This file. |
 
-A simple left-wall follower is also included in the solver source as a reference example.
+MMS Github includes a simple left-wall follower is also included in the solver source as a reference example.
 
 <!-- TODO: update this list as files are added, renamed or split up. The solver source includes solver.h and API.h, which are not in the repo yet (API.h is presumably supplied by the mms mouse template); list them here once they are committed. -->
 <!-- TODO: update this list as files change. The solver source includes solver.h and API.h, and the build command below expects API.c, main.c and solver.c, but none of these are committed yet. List them (with one-line descriptions) once they are added. -->
@@ -86,55 +84,7 @@ A simple left-wall follower is also included in the solver source as a reference
 ---
 
 ## Running in the Simulator
-## Simulator Setup (Windows)
-
-This guide gets the solver building and running in mms on Windows. For everything else about the simulator, see the [mms README](https://github.com/mackorone/mms/blob/main/README.md).
-
-### Install the C compiler (MinGW)
-
-MinGW provides `gcc`, the standard C compiler, on Windows.
-
-<!-- TODO: add the MinGW installer download link. -->
-
-
-Instead of a classic flood fill, the solver is designed to use a shortest-path search over position **and** heading, so the cost of turns is priced in. The run is split into three phases:
-
-| Phase | What it does |
-| --- | --- |
-| **Explore** | Plans a route to the center treating unknown walls as open, drives out to check the uncertain parts of that route, then re-plans. Stops once the best route is confirmed, rather than mapping the whole maze. |
-| **Return** | Heads back to the start on a path that also sets the mouse up well for the final run. |
-| **Final run** | Runs the best known route from the start to the center. |
-
----
-
-## Configuration
-
-The solver is intended to expose two tunable settings:
-
-| Setting | Description |
-| --- | --- |
-| **Maze size** | 16×16 for the simulator, 10×10 for the real maze. The goal is the center, so it moves with the size. |
-| **Exploration margin** | How close to perfect the route must be before exploring stops. Zero means explore until the best route is proven. |
-
----
-
-## Project Structure
-
-| File | Description |
-| --- | --- |
-| `MMS_Code` | The C solver source used in mms: route planning, the three-phase strategy and the entry point. |
-| `MMS_Code` | The C solver source: route planning, the three-phase strategy and the solver entry point. It also includes a simple left-wall follower as a reference example. |
-| `README.md` | This file. |
-
-A simple left-wall follower is also included in the solver source as a reference example.
-
-<!-- TODO: update this list as files are added, renamed or split up. The solver source includes solver.h and API.h, which are not in the repo yet (API.h is presumably supplied by the mms mouse template); list them here once they are committed. -->
-<!-- TODO: update this list as files change. The solver source includes solver.h and API.h, and the build command below expects API.c, main.c and solver.c, but none of these are committed yet. List them (with one-line descriptions) once they are added. -->
-
----
-
-## Running in the Simulator
-## Simulator Setup (Windows)
+### Simulator Setup (Windows)
 
 This guide gets the solver building and running in mms on Windows. For everything else about the simulator, see the [mms README](https://github.com/mackorone/mms/blob/main/README.md).
 
@@ -180,13 +130,14 @@ MinGW provides `gcc`, the standard C compiler, on Windows.
 
 | Part | Choice |
 | --- | --- |
-| Microcontroller | TBD |
+| Microcontroller | ESP32 |
 | Motors / encoders | TBD |
 | Wall sensors | TBD |
 | Power | TBD |
 
 **Build and flash steps:** TBD
 
+Links Section for Parts when Found.
 <!-- TODO: each part will be linked here once a specific part is chosen. -->
 
 ---
@@ -220,13 +171,14 @@ MinGW provides `gcc`, the standard C compiler, on Windows.
   </tr>
 </table>
 
+More will be added as schematics are found.
 <!-- TODO: more schematics will be added as they are found for each part. To add one, copy a <td> cell, then swap the image link, the alt text and the bold caption. Start a new <tr> row after every two cells. -->
 
 ---
 
 ## KiCad PCB Design
 
-**Coming soon.**
+**Once PCB design is finish picture and explination will be added here**
 
 <!-- TODO: once the design is done, add a picture of the board layout and an explanation of the board. -->
 
