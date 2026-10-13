@@ -60,12 +60,12 @@ Instead of a classic flood fill, the solver is designed to use a shortest-path s
 
 ## Configuration
 
-The solver is intended to expose two tunable settings:
+The solver has two tunable settings (the `#define`s at the top of `MMS_Code/solver.c`):
 
 | Setting | Description |
 | --- | --- |
-| **Maze size** | 16×16 for the simulator, 10×10 for the real maze. The goal is the center, so it moves with the size. |
-| **Exploration margin** | How close to perfect the route must be before exploring stops. Zero means explore until the best route is proven. |
+| **Maze size** | 16×16 for the simulator, 10×10 for the real maze. Read from the API at startup (the arrays are sized for up to 16×16). The goal is the center, so it moves with the size. |
+| **Exploration budget** | The most actions (turns plus cells driven) the mouse may spend exploring and driving home. It stands in for the 10-minute limit on the real maze. The mouse always keeps enough in reserve to get back to the start. |
 
 ---
 
@@ -73,18 +73,19 @@ The solver is intended to expose two tunable settings:
 
 | File | Description |
 | --- | --- |
-| `MMS_Code` | The core of the project: route planning and the three-phase strategy (explore, return, final run).|
+| `MMS_Code/API.h` | The only boundary between the solver and the outside world: sensing, movement and debug display calls. |
+| `MMS_Code/API.c` | Simulator version of the API: sends mms commands on stdout and reads replies from stdin. Swapped for a hardware version on the real mouse. |
+| `MMS_Code/main.c` | Entry point and main loop, including reset-button handling. |
+| `MMS_Code/solver.h` | Public interface of the solver. |
+| `MMS_Code/solver.c` | Mapping, exploration, path planning (Dijkstra over position and heading) and the simulator debug display. Also includes a simple left-wall follower as a reference example (unused by default). |
+| `tests/` | Offline test harness (not part of the mms build): fake simulator, test mazes and `run_tests.sh`. See [`tests/README.md`](tests/README.md). |
 | `README.md` | This file. |
 
-MMS Github includes a simple left-wall follower is also included in the solver source as a reference example.
-
-<!-- TODO: update this list as files are added, renamed or split up. The solver source includes solver.h and API.h, which are not in the repo yet (API.h is presumably supplied by the mms mouse template); list them here once they are committed. -->
-<!-- TODO: update this list as files change. The solver source includes solver.h and API.h, and the build command below expects API.c, main.c and solver.c, but none of these are committed yet. List them (with one-line descriptions) once they are added. -->
+<!-- TODO: update this list as files change. -->
 
 ---
 
-## Running in the Simulator
-### Simulator Setup (Windows)
+## Simulator Setup (Windows)
 
 This guide gets the solver building and running in mms on Windows. For everything else about the simulator, see the [mms README](https://github.com/mackorone/mms/blob/main/README.md).
 
@@ -96,21 +97,17 @@ MinGW provides `gcc`, the standard C compiler, on Windows.
 
 ### Connect this repo to the simulator
 
-1. Clone or download this repo to a folder **outside** the mms folder, then copy its folder path (use **Copy address as text** in File Explorer).
+1. Clone or download this repo to a folder **outside** the mms folder, then open its `MMS_Code` folder and copy that folder's path (use **Copy address as text** in File Explorer).
 2. In mms, click the **+** button next to the **Mouse** dropdown.
 3. Fill in the fields:
 
    | Field | Value |
    | --- | --- |
    | **Name** | Anything, e.g. `Micromouse_2026` |
-   | **Directory** | The repo folder path |
+   | **Directory** | The path to the `MMS_Code` folder inside this repo, e.g. `C:\path\to\Micromouse_2026\MMS_Code` |
    | **Build Command** | `gcc -o a.exe API.c main.c solver.c` |
-   | **Run Command** | The repo folder path followed by `\a.exe`, e.g. `C:\path\to\Micromouse_2026\a.exe` |
+   | **Run Command** | The `MMS_Code` folder path followed by `\a.exe`, e.g. `C:\path\to\Micromouse_2026\MMS_Code\a.exe` |
 
-   > [!WARNING]
-   > The build command above lists the files mms expects in a mouse folder (`API.c`, `main.c`, `solver.c`). Only `MMS_Code` is committed to this repo right now, so the build will not succeed until those source files are added.
-
-   <!-- TODO: once the source files are committed, confirm the build command matches the files that actually exist and update it if needed. -->
 4. Click **Build**. The box next to it should turn green and say `COMPLETE`.
 5. Pick a maze from the **Maze** dropdown and click **Run**. The score appears on the **Stats** tab after the run.
 
