@@ -1,9 +1,9 @@
 # Micromouse 2026
 
-A team Micromouse project: a maze-solving robot whose solver is written in C. The solver is developed and tested in the [Micromouse Simulator (mms)](https://github.com/mackorone/mms) and will later run on a physical mouse in a 10×10 maze. The simulator uses a 16×16 maze.
+A team Micromouse project: a maze-solving robot whose solver is written in C. The solver is developed and tested in [mms](https://github.com/mackorone/mms), the Micromouse Simulator by mackorone, and will later run on a physical mouse in a 10×10 maze. The simulator uses a 16×16 maze.
 
 > [!NOTE]
-> **Work in progress.** The code is still being developed, so this README describes what the solver is *designed* to do rather than its exact current state. Details may change as the project evolves.
+> **Work in progress.** The code is still being developed, so this README describes the intended design rather than the exact current state. Details may change as the project evolves.
 
 ---
 
@@ -13,21 +13,27 @@ A team Micromouse project: a maze-solving robot whose solver is written in C. Th
 - [Planned Approach](#planned-approach)
 - [Configuration](#configuration)
 - [Project Structure](#project-structure)
-- [Running in the Simulator](#running-in-the-simulator)
+- [Simulator Setup (Windows)](#simulator-setup-windows)
+  - [Install the C compiler (MinGW)](#install-the-c-compiler-mingw)
+  - [Install the simulator](#install-the-simulator)
+  - [Connect this repo to the simulator](#connect-this-repo-to-the-simulator)
 - [Hardware](#hardware)
 - [Circuit Diagrams](#circuit-diagrams)
 - [KiCad PCB Design](#kicad-pcb-design)
 - [Team](#team)
+- [Acknowledgements](#acknowledgements)
 
 ---
 
 ## Goal
 
-The aim is the best possible mms score, not just reaching the center. The score (lower is better) is:
+The aim is the best mms score, not just reaching the center. The official score (lower is better) is:
 
 ```
-score = bestRunDistance + bestRunTurns + (totalDistance + totalTurns) / 10
+score = best run turns + best run effective distance + 0.1 × (total turns + total effective distance)
 ```
+
+"Effective distance" equals normal distance when the mouse moves one cell at a time. See the [Scorekeeping section of the mms README](https://github.com/mackorone/mms/blob/main/README.md#scorekeeping) for the full definition.
 
 This has two implications:
 
@@ -63,25 +69,83 @@ The solver is intended to expose two tunable settings:
 
 | File | Description |
 | --- | --- |
-| `MMS_Code` | The C solver source used in mms: route planning, the three-phase strategy and the entry point. |
+| `MMS_Code` | The C solver source: route planning, the three-phase strategy and the solver entry point. It also includes a simple left-wall follower as a reference example. |
 | `README.md` | This file. |
 
-A simple left-wall follower is also included in the solver source as a reference example.
-
-<!-- TODO: update this list as files are added, renamed or split up. The solver source includes solver.h and API.h, which are not in the repo yet (API.h is presumably supplied by the mms mouse template); list them here once they are committed. -->
+<!-- TODO: update this list as files change. The solver source includes solver.h and API.h, and the build command below expects API.c, main.c and solver.c, but none of these are committed yet. List them (with one-line descriptions) once they are added. -->
 
 ---
 
-## Running in the Simulator
+## Simulator Setup (Windows)
 
-1. Install [mms](https://github.com/mackorone/mms).
-2. Add a new mouse in mms and point its directory at this repo.
-3. Set the build and run commands. *(TBD, see below.)*
-4. Load a maze and press **Run**. The score is shown on the **Stats** tab.
+This guide gets the solver building and running in mms on Windows. For everything else about the simulator, see the [mms README](https://github.com/mackorone/mms/blob/main/README.md).
 
-> Build and run commands: **Coming soon.**
+### Install the C compiler (MinGW)
 
-<!-- TODO: add the exact build and run commands for mms once the repo has a main.c, Makefile or similar. None exists yet, so no commands are documented. -->
+MinGW provides `gcc`, the standard C compiler, on Windows.
+
+<!-- TODO: add the MinGW installer download link. -->
+
+1. Download and run the MinGW installer. *(Download link: coming soon.)*
+2. In the MinGW Installation Manager, check `mingw32-gcc-g++-bin`.
+3. Open the **Installation** menu, click **Apply Changes**, then click **Apply** in the window that opens. Close the installer when it finishes.
+4. Add `gcc` to your `PATH`:
+   1. Search Windows for "environment variables" and open **Edit the system environment variables**.
+   2. Click **Environment Variables**.
+   3. Select the user variable `Path` and click **Edit**.
+   4. Click **New** and paste the MinGW `bin` folder. The default is:
+
+      ```
+      C:\MinGW\bin
+      ```
+
+      Check the folder in File Explorer and use **Copy address as text** to get the exact path.
+   5. Click **OK** on every window.
+5. Test it. Open Command Prompt and run:
+
+   ```
+   gcc
+   ```
+
+   If it is set up correctly, you will see `gcc: fatal error: no input files`. That error means it works.
+
+### Install the simulator
+
+1. Download `windows.zip` from the [mms v1.1.0 release](https://github.com/mackorone/mms/releases/tag/v1.1.0).
+2. Unzip it anywhere and run `mms.exe`.
+
+> [!TIP]
+> If Microsoft Defender SmartScreen blocks it, click **More info**, then **Run anyway**.
+
+### Connect this repo to the simulator
+
+1. Clone or download this repo to a folder **outside** the mms folder, then copy its folder path (use **Copy address as text** in File Explorer).
+2. In mms, click the **+** button next to the **Mouse** dropdown.
+3. Fill in the fields:
+
+   | Field | Value |
+   | --- | --- |
+   | **Name** | Anything, e.g. `Micromouse_2026` |
+   | **Directory** | The repo folder path |
+   | **Build Command** | `gcc -o a.exe API.c main.c solver.c` |
+   | **Run Command** | The repo folder path followed by `\a.exe`, e.g. `C:\path\to\Micromouse_2026\a.exe` |
+
+   > [!WARNING]
+   > The build command above lists the files mms expects in a mouse folder (`API.c`, `main.c`, `solver.c`). Only `MMS_Code` is committed to this repo right now, so the build will not succeed until those source files are added.
+
+   <!-- TODO: once the source files are committed, confirm the build command matches the files that actually exist and update it if needed. -->
+4. Click **Build**. The box next to it should turn green and say `COMPLETE`.
+5. Pick a maze from the **Maze** dropdown and click **Run**. The score appears on the **Stats** tab after the run.
+
+### Tips
+
+- The simulator API (wall checks, movement) is documented in the [mms Mouse API](https://github.com/mackorone/mms#mouse-api). When the code moves to the real mouse, these API calls get replaced with functions that read the IR sensors and drive the motors.
+- The **Reset** button isn't supported by this code. Click **Cancel** to restart a run instead.
+- Custom mazes can be written as text files. See the [Maze Files section of the mms README](https://github.com/mackorone/mms#maze-files). For ready-made mazes, see [micromouseonline/mazefiles](https://github.com/micromouseonline/mazefiles).
+- macOS and Linux setup steps: coming soon.
+
+<!-- TODO: add our own example mazes (coming soon) and link them in the maze tip above. -->
+<!-- TODO: add macOS and Linux setup steps. -->
 
 ---
 
@@ -152,3 +216,9 @@ A simple left-wall follower is also included in the solver source as a reference
 | Connor | TBD |
 
 <!-- TODO: once roles are set, each team member should fill in their role and a short description of what they worked on. -->
+
+---
+
+## Acknowledgements
+
+This project is developed and tested with [mms](https://github.com/mackorone/mms), the Micromouse Simulator by mackorone.
