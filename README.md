@@ -5,7 +5,6 @@ A team Micromouse project: a maze-solving robot whose solver is written in C. Th
 
 > [!NOTE]
 > **Work in progress.** The code is still being developed, so this README describes what the solver is *designed* to do rather than its exact current state. Details may change as the project evolves.
-> **Work in progress.** The code is still being developed, so this README describes the intended design rather than the exact current state. Details may change as the project evolves.
 
 ---
 
