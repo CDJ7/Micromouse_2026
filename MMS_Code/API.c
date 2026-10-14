@@ -1,6 +1,7 @@
 /*
  * API.c - mms simulator implementation of API.h.
  *
+ *
  * Protocol (see the "Mouse API" section of the mms README): we print one
  * command per line on stdout and, for commands that have a reply, read one
  * line from stdin. stdout is reserved for these commands, so anything else
