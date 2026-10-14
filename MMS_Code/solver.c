@@ -1,6 +1,7 @@
 /*
  * solver.c - mapping, exploration, path planning and debug display.
  *
+ *
  * GOAL
  *   Best mms score:  bestRunTurns + bestRunEffectiveDistance
  *                    + 0.1 * (totalTurns + totalEffectiveDistance)
