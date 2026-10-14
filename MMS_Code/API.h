@@ -1,6 +1,7 @@
 /*
  * API.h - the ONLY boundary between the solver and the outside world.
  *
+ *
  * The solver (solver.c) and the main loop (main.c) talk to the mouse
  * exclusively through these functions. In the simulator, API.c turns each call
  * into an mms command on stdout and reads the reply from stdin. On the real
