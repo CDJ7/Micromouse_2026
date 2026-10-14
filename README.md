@@ -174,7 +174,7 @@ More will be added as schematics are found.
 
 ## KiCad PCB Design
 
-**Once PCB design is finish picture and explination will be added here**
+**Once PCB design is finish picture and explanation will be added here**
 
 <!-- TODO: once the design is done, add a picture of the board layout and an explanation of the board. -->
 
