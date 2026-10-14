@@ -1,6 +1,7 @@
 /*
  * main.c - entry point and main loop.
  *
+ *
  * Deliberately tiny: it only knows about the API (for the reset button) and the
  * solver. All the thinking happens in solver.c.
  *
