@@ -1,6 +1,7 @@
 /*
  * solver.h - public interface of the maze solver.
  *
+ *
  * main.c only needs solver_init / solver_step / solver_reset. The rest is for
  * the left-wall-follower example and for the offline test harness in tests/.
  */
