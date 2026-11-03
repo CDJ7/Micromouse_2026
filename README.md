@@ -1,7 +1,6 @@
 # Micromouse 2026
 
 A team Micromouse project: a maze-solving robot whose solver is written in C. The solver is developed and tested in the [Micromouse Simulator (mms)](https://github.com/mackorone/mms) and will later run on a physical mouse in a 10×10 maze. The simulator uses a 16×16 maze.
-A team Micromouse project: a maze-solving robot whose solver is written in C. The solver is developed and tested in [mms](https://github.com/mackorone/mms), the Micromouse Simulator by mackorone, and will later run on a physical mouse in a 10×10 maze. The simulator uses a 16×16 maze.
 
 > [!NOTE]
 > **Work in progress.** The code is still being developed, so this README describes what the solver is *designed* to do rather than its exact current state. Details may change as the project evolves.
@@ -128,6 +127,7 @@ MinGW provides `gcc`, the standard C compiler, on Windows.
 | --- | --- |
 | Microcontroller | ESP32 |
 | Motors / encoders | TBD |
+| IMU | Adafruit BNO055 breakout (per schematic) |
 | Wall sensors | TBD |
 | Power | TBD |
 
@@ -135,6 +135,7 @@ MinGW provides `gcc`, the standard C compiler, on Windows.
 
 Links Section for Parts when Found.
 <!-- TODO: each part will be linked here once a specific part is chosen. -->
+<!-- TODO: the microcontroller schematic uses an STM32 Black Pill (symbol "STM32F11CE_BlackPill", probably STM32F411CE) but the table above says ESP32. Confirm which board is the real one and make the table, the schematics and the firmware plan agree. -->
 
 ---
 
@@ -164,6 +165,38 @@ Links Section for Parts when Found.
       <br>
       <b>IR Receiver (Left)</b>
     </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <img src="docs/schematics/microcontroller.jpg" alt="Schematic of the microcontroller: an STM32 Black Pill board with two 0.1 uF decoupling capacitors on 3.3 V and its GPIO pins broken out to net labels" width="100%">
+      <br>
+      <b>Microcontroller (Black Pill)</b>
+    </td>
+    <td width="50%" align="center">
+      <img src="docs/schematics/imu-bno055.jpg" alt="Schematic of the Adafruit BNO055 IMU breakout connected to 3.3 V, ground, I2C (PB8 and PB9) and the PA11 and PA12 reset and interrupt pins" width="100%">
+      <br>
+      <b>IMU (BNO055 Breakout)</b>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <img src="docs/schematics/connector-j5.jpg" alt="Schematic of a 6-pin header J5 with 5 V on pin 2, ground on pin 3, nets PA3 and PA2 on pins 4 and 5, and pins 1 and 6 unconnected" width="100%">
+      <br>
+      <b>6-Pin Connector (J5)</b>
+    </td>
+    <td width="50%" align="center">
+      <img src="docs/schematics/push-button-sw2.jpg" alt="Schematic of push button SW2 connected between net PB12 and ground" width="100%">
+      <br>
+      <b>Push Button (SW2)</b>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <img src="docs/schematics/power-input-battery.jpg" alt="Schematic of the battery input: two battery connectors, a resettable fuse, a power switch, and a 0.1 uF and 100 uF filter capacitor pair on the switched battery rail" width="100%">
+      <br>
+      <b>Power Input and Filtering (Battery, Fuse and Switch)</b>
+    </td>
+    <td width="50%"></td>
   </tr>
 </table>
 
