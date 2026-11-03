@@ -77,6 +77,7 @@ The solver has two tunable settings (the `#define`s at the top of `MMS_Code/solv
 | `MMS_Code/solver.h` | Public interface of the solver. |
 | `MMS_Code/solver.c` | Mapping, exploration, path planning (Dijkstra over position and heading) and the simulator debug display. Also includes a simple left-wall follower as a reference example (unused by default). |
 | `tests/` | Offline test harness (not part of the mms build): fake simulator, test mazes and `run_tests.sh`. See [`tests/README.md`](tests/README.md). |
+| `docs/schematics/` | Schematic images shown in the Circuit Diagrams section. |
 | `README.md` | This file. |
 
 <!-- TODO: update this list as files change. -->
@@ -125,17 +126,16 @@ MinGW provides `gcc`, the standard C compiler, on Windows.
 
 | Part | Choice |
 | --- | --- |
-| Microcontroller | ESP32 |
-| Motors / encoders | TBD |
-| IMU | Adafruit BNO055 breakout (per schematic) |
-| Wall sensors | TBD |
-| Power | TBD |
+| Microcontroller | STM32 Black Pill board (schematic part `STM32F11CE_BlackPill`) |
+| Motors / encoders | Dual H-bridge motor driver with left and right motor headers (see schematic); motors and encoders TBD |
+| IMU | Adafruit BNO055 breakout |
+| Wall sensors | Infrared emitters and phototransistor receivers: front center, left and right |
+| Power | Battery, fuse and power switch feeding a MIC5219-3.3 voltage regulator (3.3 V) |
 
 **Build and flash steps:** TBD
 
 Links Section for Parts when Found.
-<!-- TODO: each part will be linked here once a specific part is chosen. -->
-<!-- TODO: the microcontroller schematic uses an STM32 Black Pill (symbol "STM32F11CE_BlackPill", probably STM32F411CE) but the table above says ESP32. Confirm which board is the real one and make the table, the schematics and the firmware plan agree. -->
+<!-- TODO: each part will be linked here once a specific part is chosen. Still to confirm: exact STM32 board and part number, motor driver part, motors, encoders and the IR emitter and receiver parts. -->
 
 ---
 
@@ -195,6 +195,30 @@ Links Section for Parts when Found.
       <img src="docs/schematics/power-input-battery.jpg" alt="Schematic of the battery input: two battery connectors, a resettable fuse, a power switch, and a 0.1 uF and 100 uF filter capacitor pair on the switched battery rail" width="100%">
       <br>
       <b>Power Input and Filtering (Battery, Fuse and Switch)</b>
+    </td>
+    <td width="50%" align="center">
+      <img src="docs/schematics/voltage-regulator-mic5219.jpg" alt="Schematic of the 3.3 V voltage regulator: a MIC5219-3.3 regulator fed from the switched battery rail with 10 uF input, 1 nF bypass and 22 uF output capacitors" width="100%">
+      <br>
+      <b>Voltage Regulator (MIC5219-3.3)</b>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <img src="docs/schematics/ir-emitters.jpg" alt="Schematic of three infrared emitter circuits for the front-center, left and right wall sensors, each with a transistor switch, resistors and capacitors" width="100%">
+      <br>
+      <b>IR Emitters (Front Center, Left, Right)</b>
+    </td>
+    <td width="50%" align="center">
+      <img src="docs/schematics/ir-receivers.jpg" alt="Schematic of three infrared receiver circuits for the front-center, left and right wall sensors, each a phototransistor with a 47k resistor feeding a microcontroller input pin" width="100%">
+      <br>
+      <b>IR Receivers (Front Center, Left, Right)</b>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <img src="docs/schematics/motor-driver.jpg" alt="Schematic of a dual H-bridge motor driver with decoupling capacitors, and header connectors for the left and right motors" width="100%">
+      <br>
+      <b>Dual H-Bridge Motor Driver and Motor Headers</b>
     </td>
     <td width="50%"></td>
   </tr>
