@@ -214,7 +214,6 @@ Links Section for Parts when Found.
 
 **Note on the IR sensors:** the IR emitter and IR receiver schematics are each one circuit that is repeated for every wall sensor. The mouse has a copy for the front, the left and the right, and they are identical apart from the microcontroller pin each one connects to.
 
-More will be added as schematics are found.
 <!-- TODO: more schematics will be added as they are found for each part. To add one, copy a <td> cell, then swap the image link, the alt text and the bold caption. Start a new <tr> row after every two cells. -->
 
 ---
