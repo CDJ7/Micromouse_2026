@@ -156,14 +156,14 @@ Links Section for Parts when Found.
   </tr>
   <tr>
     <td width="50%" align="center">
-      <img src="https://github.com/user-attachments/assets/4074236e-042d-40d0-a153-6fc4828e904b" alt="Schematic of the left infrared emitter circuit" width="100%">
+      <img src="https://github.com/user-attachments/assets/4074236e-042d-40d0-a153-6fc4828e904b" alt="Schematic of the infrared emitter circuit used for the front, left and right wall sensors" width="100%">
       <br>
-      <b>IR Emitter (Left)</b>
+      <b>IR Emitter (Front, Left and Right)</b>
     </td>
     <td width="50%" align="center">
-      <img src="https://github.com/user-attachments/assets/de23c9d6-72d0-4f77-b1b1-ba1d5da4d40e" alt="Schematic of the left infrared receiver circuit" width="100%">
+      <img src="https://github.com/user-attachments/assets/de23c9d6-72d0-4f77-b1b1-ba1d5da4d40e" alt="Schematic of the infrared receiver circuit used for the front, left and right wall sensors" width="100%">
       <br>
-      <b>IR Receiver (Left)</b>
+      <b>IR Receiver (Front, Left and Right)</b>
     </td>
   </tr>
   <tr>
@@ -204,18 +204,6 @@ Links Section for Parts when Found.
   </tr>
   <tr>
     <td width="50%" align="center">
-      <img src="docs/schematics/ir-emitters.jpg" alt="Schematic of three infrared emitter circuits for the front-center, left and right wall sensors, each with a transistor switch, resistors and capacitors" width="100%">
-      <br>
-      <b>IR Emitters (Front Center, Left, Right)</b>
-    </td>
-    <td width="50%" align="center">
-      <img src="docs/schematics/ir-receivers.jpg" alt="Schematic of three infrared receiver circuits for the front-center, left and right wall sensors, each a phototransistor with a 47k resistor feeding a microcontroller input pin" width="100%">
-      <br>
-      <b>IR Receivers (Front Center, Left, Right)</b>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" align="center">
       <img src="docs/schematics/motor-driver.jpg" alt="Schematic of a dual H-bridge motor driver with decoupling capacitors, and header connectors for the left and right motors" width="100%">
       <br>
       <b>Dual H-Bridge Motor Driver and Motor Headers</b>
@@ -223,6 +211,8 @@ Links Section for Parts when Found.
     <td width="50%"></td>
   </tr>
 </table>
+
+**Note on the IR sensors:** the IR emitter and IR receiver schematics are each one circuit that is repeated for every wall sensor. The mouse has a copy for the front, the left and the right, and they are identical apart from the microcontroller pin each one connects to.
 
 More will be added as schematics are found.
 <!-- TODO: more schematics will be added as they are found for each part. To add one, copy a <td> cell, then swap the image link, the alt text and the bold caption. Start a new <tr> row after every two cells. -->
