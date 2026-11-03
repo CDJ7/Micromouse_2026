@@ -58,25 +58,35 @@ Instead of a classic flood fill, the solver is designed to use a shortest-path s
 
 ## Configuration
 
-The solver has two tunable settings (the `#define`s at the top of `MMS_Code/solver.c`):
+The solver is tuned with `#define`s at the top of `MMS_Code/solver.c`. The most important ones:
 
 | Setting | Description |
 | --- | --- |
-| **Maze size** | 16×16 for the simulator, 10×10 for the real maze. Read from the API at startup (the arrays are sized for up to 16×16). The goal is the center, so it moves with the size. |
-| **Exploration budget** | The most actions (turns plus cells driven) the mouse may spend exploring and driving home. It stands in for the 10-minute limit on the real maze. The mouse always keeps enough in reserve to get back to the start. |
+| **Maze size** | 16×16 for the simulator, 10×10 for the real maze. Read from the API at startup (arrays are sized for up to `MAX_MAZE_SIZE`, 16 by default). The goal is the center, so it moves with the size. |
+| **Exploration budget** (`EXPLORE_BUDGET`) | The most cost the mouse may spend exploring and driving home. It stands in for the 10-minute limit on the real maze, and the mouse always keeps enough in reserve to get back to the start. |
+| **Action costs** (`COST_FORWARD`, `COST_TURN`) | What a cell and a 90° turn cost. 1 and 1 in the simulator (how mms scores a run). On the real mouse, set them to the measured times so the planner minimizes real run time. The budget uses the same unit. |
+| **Clock mode** (`EXPLORE_BUDGET_USES_CLOCK`) | Measure the budget with a real clock instead of adding up action costs. |
+| **Map the whole maze** (`EXPLORE_MAP_WHOLE_MAZE`) | On: after the best route is proven, keep mapping with the time left. Off: stop as soon as it is proven, which scores better in mms. |
+| **Sensor safety** (`WALL_READS`, `VERIFY_FRONT_BEFORE_MOVE`, `VERIFY_UNDRIVEN_ON_RUNS`) | Read each wall several times and vote, and re-check the front sensor before stepping into a side that has not been driven. Meant for noisy real sensors. |
+| **Debug display** (`DEBUG_SHOW_*`, `DIST_DISPLAY_FLOOD`) | Switch the simulator display layers (distances, walls, colors, routes) on or off. |
 
 ---
 
 ## Project Structure
 
+The repository is split into simulation code and (later) code for the real mouse.
+
 | File | Description |
 | --- | --- |
-| `MMS_Code/API.h` | The only boundary between the solver and the outside world: sensing, movement and debug display calls. |
-| `MMS_Code/API.c` | Simulator version of the API: sends mms commands on stdout and reads replies from stdin. Swapped for a hardware version on the real mouse. |
+| `MMS_Code/` | **Simulation code.** Everything needed to run the solver in mms. |
+| `MMS_Code/API.h` | The only boundary between the solver and the outside world: sensing, movement, a millisecond clock and debug display calls. |
+| `MMS_Code/API.c` | Simulator version of the API: sends mms commands on stdout and reads replies from stdin. |
 | `MMS_Code/main.c` | Entry point and main loop, including reset-button handling. |
 | `MMS_Code/solver.h` | Public interface of the solver. |
 | `MMS_Code/solver.c` | Mapping, exploration, path planning (Dijkstra over position and heading) and the simulator debug display. Also includes a simple left-wall follower as a reference example (unused by default). |
-| `tests/` | Offline test harness (not part of the mms build): fake simulator, test mazes and `run_tests.sh`. See [`tests/README.md`](tests/README.md). |
+| `Real_Mouse_Code/` | **Real mouse code.** Coming soon: firmware for the physical mouse. |
+| `tests/` | Offline test harness for the simulation code (not part of the mms build): fake simulator, test mazes and `run_tests.sh`. See [`tests/README.md`](tests/README.md). |
+| `.github/workflows/` | Runs the offline tests automatically on every push and pull request. |
 | `docs/schematics/` | Schematic images shown in the Circuit Diagrams section. |
 | `README.md` | This file. |
 

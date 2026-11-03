@@ -26,10 +26,14 @@ static const int DY[4] = {1, 0, -1, 0};
 void sim_start(void) {
     int keepResets = st.resetCalls, keepResetAt = st.resetAtCall;
     int keepCalls = st.wasResetCalls;
+    int keepNoise = st.noisePermille;
+    unsigned keepRng = st.rng;
     memset(&st, 0, sizeof st);
     st.resetCalls = keepResets;
     st.resetAtCall = keepResetAt;
     st.wasResetCalls = keepCalls;
+    st.noisePermille = keepNoise;
+    st.rng = keepRng ? keepRng : 12345u;
     st.x = st.y = 0;
     st.heading = 0;
 }
@@ -106,7 +110,28 @@ int sim_load(const char *path) {
 
 /* ---- sensing ---- */
 
-static bool wallToward(int d) { return maze.wall[st.x][st.y][d & 3] != 0; }
+/* A wall reading, flipped with probability noisePermille/1000 to imitate a
+ * bad IR reading. */
+static bool wallToward(int d) {
+    bool truth = maze.wall[st.x][st.y][d & 3] != 0;
+    if (st.noisePermille > 0) {
+        st.rng = st.rng * 1664525u + 1013904223u;
+        if ((int)((st.rng >> 8) % 1000u) < st.noisePermille) {
+            st.sensorFlips++;
+            return !truth;
+        }
+    }
+    return truth;
+}
+
+#ifndef SIM_MS_PER_CELL
+#define SIM_MS_PER_CELL 250
+#endif
+#ifndef SIM_MS_PER_TURN
+#define SIM_MS_PER_TURN 400
+#endif
+
+uint32_t API_timeMs(void) { return st.timeMs; }
 
 bool API_wallFront(void) { return wallToward(st.heading); }
 bool API_wallRight(void) { return wallToward(st.heading + 1); }
@@ -143,6 +168,7 @@ bool API_moveForward(int distance) {
         record('F', i + 1);
         st.x += DX[st.heading];
         st.y += DY[st.heading];
+        st.timeMs += SIM_MS_PER_CELL;
     }
     /* mms: each cell after the second adds only half a point */
     st.effDist += distance <= 2 ? distance : 2 + 0.5 * (distance - 2);
@@ -151,12 +177,14 @@ bool API_moveForward(int distance) {
 
 void API_turnRight(void) {
     record('R', 0);
+    st.timeMs += SIM_MS_PER_TURN;
     st.heading = (st.heading + 1) & 3;
     st.turns++;
 }
 
 void API_turnLeft(void) {
     record('L', 0);
+    st.timeMs += SIM_MS_PER_TURN;
     st.heading = (st.heading + 3) & 3;
     st.turns++;
 }

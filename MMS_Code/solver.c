@@ -37,14 +37,24 @@
  *   Cell text      distance to the goal (see DIST_DISPLAY_FLOOD)
  *   Walls          drawn with setWall the moment they are discovered
  *
+ * ROBUSTNESS (matters on a real mouse, harmless in the simulator)
+ *   - Each wall can be read several times and decided by majority (WALL_READS).
+ *   - Before driving into an unexplored-looking side the front sensor is read
+ *     once more (VERIFY_FRONT_BEFORE_MOVE), so one bad reading cannot cause a crash.
+ *   - A side we have driven through is open for good; a later "wall" reading
+ *     of it is ignored. A wall that is later read as open is kept (the safe
+ *     choice: a phantom wall costs time, a missed wall costs a crash).
+ *
  * PORTING NOTE
  *   All hardware/simulator access goes through API.h. The only other output is
- *   LOG(), which writes to stderr (stdout belongs to the simulator protocol).
+ *   LOG(), which defaults to stderr (stdout belongs to the simulator protocol).
+ *   On a microcontroller define LOG before this file is compiled (e.g. -DLOG=...)
+ *   to route it to a serial port, and nothing here needs <stdio.h>.
  */
 #include "solver.h"
 
 #include <stdbool.h>
-#include <stdio.h>
+#include <stdint.h>
 
 #include "API.h"
 
@@ -55,15 +65,71 @@
 /* Largest maze we have room for. The real size is read from the API at startup
  * (16x16 in the simulator, 10x10 for the competition maze). All arrays are
  * static and sized from this. */
+#ifndef MAX_MAZE_SIZE
 #define MAX_MAZE_SIZE 16
+#endif
 
-/* Exploration budget: the most actions (one turn or one cell driven = 1)
- * the mouse may spend exploring AND driving home. It stands in for the
- * 10-minute limit. The mouse always keeps enough in reserve to get back to the
- * start. Calibrate it on the real mouse: (10 min) / (average time per action).
- * Override on the command line with -DEXPLORE_BUDGET=n. */
+/* What one action costs. Only the ratio changes which route is "best", and the
+ * exploration budget below is counted in the same unit.
+ *   Simulator: 1 and 1. A turn costs the same as a cell, which is how mms
+ *              scores a run.
+ *   Real mouse: the measured time of one cell and one 90-degree turn in
+ *              milliseconds, so the planner minimizes real run time. */
+#ifndef COST_FORWARD
+#define COST_FORWARD 1
+#endif
+#ifndef COST_TURN
+#define COST_TURN 1
+#endif
+
+/* Exploration budget: the most cost (see above) the mouse may spend exploring
+ * AND driving home. It stands in for the 10-minute limit. The mouse always
+ * keeps enough in reserve to get back to the start.
+ * With the 1/1 costs above it is a number of actions. Override on the command
+ * line with -DEXPLORE_BUDGET=n. */
 #ifndef EXPLORE_BUDGET
 #define EXPLORE_BUDGET 1500
+#endif
+
+/* How the budget is measured:
+ *   0 = add up the cost of every action taken (works anywhere)
+ *   1 = read the clock, API_timeMs(). Costs and budget must then be in
+ *       milliseconds. TIME_SAFETY_MARGIN (ms) is held back for things the
+ *       model does not know about (sensor reads, slip, battery sag). */
+#ifndef EXPLORE_BUDGET_USES_CLOCK
+#define EXPLORE_BUDGET_USES_CLOCK 0
+#endif
+#ifndef TIME_SAFETY_MARGIN
+#define TIME_SAFETY_MARGIN 0
+#endif
+
+/* 1 = after the best route is proven, keep mapping the rest of the maze until
+ *     the budget runs out (useful insurance on a real mouse with noisy sensors).
+ * 0 = stop exploring as soon as the best route is proven. In mms this scores
+ *     better, because exploration still counts at 1/10 of a run. */
+#ifndef EXPLORE_MAP_WHOLE_MAZE
+#define EXPLORE_MAP_WHOLE_MAZE 1
+#endif
+
+/* Reads per wall decision (use an odd number). A wall is declared when at least
+ * half of the reads say so. Use 1 in the simulator, 3 or more on noisy sensors. */
+#ifndef WALL_READS
+#define WALL_READS 1
+#endif
+
+/* 1 = read the front sensor once more before each exploration step into a side
+ * we have not driven through yet, and refuse the move if it now sees a wall. */
+#ifndef VERIFY_FRONT_BEFORE_MOVE
+#define VERIFY_FRONT_BEFORE_MOVE 1
+#endif
+
+/* 1 = also check, during the return trip and the final run, each side that
+ * the mouse has not driven through before, with the front sensor, and
+ * re-plan if a wall turns up. Straights are then split at such sides, so this
+ * costs a little score in mms. Turn it on for the real mouse, where a single
+ * bad reading would otherwise be a crash. 0 = trust the map completely. */
+#ifndef VERIFY_UNDRIVEN_ON_RUNS
+#define VERIFY_UNDRIVEN_ON_RUNS 0
 #endif
 
 /* Distance numbers drawn in each cell:
@@ -98,12 +164,20 @@
 #define NUM_STATES (NUM_CELLS * 4) /* (cell, heading) pairs */
 #define INF_COST   0x3fffffff
 
-/* Path costs are integers: one action (turn or cell) is ACTION_COST. Entering
- * a cell across a side we have never seen costs a tiny UNKNOWN_PENALTY extra
- * so that, between equally good routes, we prefer the one made of known sides.
- * The penalty total must stay below ACTION_COST (at most NUM_STATES sides). */
-#define ACTION_COST     4096
+/* Path costs are integers. One cost unit is COST_SCALE internally. Entering a
+ * cell across a side we have never seen costs a tiny UNKNOWN_PENALTY extra so
+ * that, between equally good routes, we prefer the one made of known sides.
+ * The penalty total must stay below COST_SCALE (at most NUM_STATES sides). */
+#define COST_SCALE      2048
 #define UNKNOWN_PENALTY 1
+#define FORWARD_STEP    (COST_FORWARD * COST_SCALE)
+#define TURN_STEP       (COST_TURN * COST_SCALE)
+
+/* Compile-time check that the largest possible path cost cannot overflow. If
+ * this line fails to compile, COST_FORWARD / COST_TURN are too large. */
+typedef char costs_must_fit_in_int[(COST_FORWARD > 0 && COST_TURN > 0 &&
+    (long)COST_SCALE * (COST_FORWARD > COST_TURN ? COST_FORWARD : COST_TURN) * NUM_STATES <
+        INF_COST) ? 1 : -1];
 
 /* The final run is worth ten times the exploration in the score formula. */
 #define RUN_WEIGHT 10
@@ -126,10 +200,13 @@ static const int DX[4] = {0, 1, 0, -1};
 static const int DY[4] = {1, 0, -1, 0};
 static const char DIR_CHAR[4] = {'n', 'e', 's', 'w'};
 
+#ifndef LOG
 #if DEBUG_LOG
+#include <stdio.h>
 #define LOG(...) fprintf(stderr, __VA_ARGS__)
 #else
 #define LOG(...) ((void)0)
+#endif
 #endif
 
 /* ====================================================================== */
@@ -141,18 +218,23 @@ static int goalLoX, goalHiX, goalLoY, goalHiY; /* the center block */
 
 /* What we know about each cell side. Kept consistent on both sides of a wall. */
 static unsigned char edgeKnow[MAX_MAZE_SIZE][MAX_MAZE_SIZE][4];
+static unsigned char drivenEdge[MAX_MAZE_SIZE][MAX_MAZE_SIZE][4]; /* crossed by the mouse */
 static unsigned char visited[MAX_MAZE_SIZE][MAX_MAZE_SIZE];
 static bool mapChanged; /* a wall was learned since the distances were drawn */
 
 static int posX, posY, heading;
 static int phase;
 static int exploreActions, returnActions, finalActions;
+static int exploreCost, returnCost; /* the same, weighted by COST_FORWARD/COST_TURN */
+static uint32_t startTimeMs;
+static int contradictions, frontVetoes;
 static bool goalReached;
 static bool routeProven;
 static bool wholeMazeMapped;
 static bool budgetWarned;
 static bool provenLogged;
 static int finalCells, finalTurns;
+static int finalExecCells, finalExecTurns; /* final-run actions already driven */
 
 /* Exploration decision memory */
 static int targetX, targetY; /* -1 = no target */
@@ -282,13 +364,32 @@ static int manhattanToGoal(int x, int y) {
     return dx + dy;
 }
 
+/* Small non-negative number to text, so we do not need printf-style formatting
+ * (it is large and slow on a microcontroller). */
+static void numberToText(int value, char *out) {
+    char digits[8];
+    int n = 0, i;
+    if (value == 0) {
+        out[0] = '0';
+        out[1] = 0;
+        return;
+    }
+    while (value > 0 && n < 7) {
+        digits[n++] = (char)('0' + value % 10);
+        value /= 10;
+    }
+    for (i = 0; i < n; i++) out[i] = digits[n - 1 - i];
+    out[n] = 0;
+}
+
 static void showDistance(int x, int y, int value) {
     char text[12];
     if (value == shownDist[x][y]) return;
     if (value < 0) {
-        snprintf(text, sizeof text, "--"); /* walled off from the goal */
+        text[0] = text[1] = '-'; /* walled off from the goal */
+        text[2] = 0;
     } else {
-        snprintf(text, sizeof text, "%d", value);
+        numberToText(value, text);
     }
     API_setText(x, y, text);
     shownDist[x][y] = value;
@@ -353,14 +454,55 @@ static bool setEdge(int x, int y, int d, int value) {
     return changed;
 }
 
+enum { SENSE_FRONT, SENSE_LEFT, SENSE_RIGHT };
+
+/* One wall decision: WALL_READS readings, wall if at least half say wall. A tie
+ * goes to "wall" because a phantom wall only costs time. */
+static bool readWall(int which) {
+    int i, walls = 0;
+    for (i = 0; i < WALL_READS; i++) {
+        bool w = (which == SENSE_FRONT) ? API_wallFront()
+                 : (which == SENSE_LEFT) ? API_wallLeft()
+                                         : API_wallRight();
+        if (w) walls++;
+    }
+    return walls * 2 >= WALL_READS;
+}
+
+/* Fold one sensor decision into the map, with the safety rules described at
+ * the top of this file. */
+static void recordSensed(int x, int y, int d, bool isWall) {
+    int old = edgeKnow[x][y][d];
+    if (drivenEdge[x][y][d]) {
+        if (isWall) {
+            contradictions++;
+            LOG("[warn] ignoring a wall reading at (%d,%d) side %c: we have driven through it\n",
+                x, y, DIR_CHAR[d]);
+        }
+        return;
+    }
+    if (old == EDGE_WALL && !isWall) {
+        contradictions++;
+        LOG("[warn] (%d,%d) side %c was a wall and now reads open; keeping the wall\n", x, y,
+            DIR_CHAR[d]);
+        return;
+    }
+    if (old == EDGE_OPEN && isWall) {
+        contradictions++;
+        LOG("[warn] (%d,%d) side %c was open and now reads wall; updating the map\n", x, y,
+            DIR_CHAR[d]);
+    }
+    setEdge(x, y, d, isWall ? EDGE_WALL : EDGE_OPEN);
+}
+
 /* Called on arrival in a cell: read the three walls we can see. The side we
  * came through must be open, so we know that one for free. */
 static void senseWalls(void) {
     int front = heading, left = (heading + 3) & 3, right = (heading + 1) & 3;
     int back = (heading + 2) & 3;
-    setEdge(posX, posY, front, API_wallFront() ? EDGE_WALL : EDGE_OPEN);
-    setEdge(posX, posY, left, API_wallLeft() ? EDGE_WALL : EDGE_OPEN);
-    setEdge(posX, posY, right, API_wallRight() ? EDGE_WALL : EDGE_OPEN);
+    recordSensed(posX, posY, front, readWall(SENSE_FRONT));
+    recordSensed(posX, posY, left, readWall(SENSE_LEFT));
+    recordSensed(posX, posY, right, readWall(SENSE_RIGHT));
     if (edgeKnow[posX][posY][back] == EDGE_UNKNOWN) {
         setEdge(posX, posY, back, EDGE_OPEN);
     }
@@ -447,10 +589,10 @@ static void runDijkstra(int sx, int sy, int startHeading, bool knownOnly) {
         if (e == EDGE_OPEN || (e == EDGE_UNKNOWN && !knownOnly)) {
             int extra = (e == EDGE_UNKNOWN) ? UNKNOWN_PENALTY : 0;
             relax(stateIndex(x + DX[h], y + DY[h], h),
-                  dist[u] + ACTION_COST + extra, u, ACT_FORWARD);
+                  dist[u] + FORWARD_STEP + extra, u, ACT_FORWARD);
         }
-        relax(stateIndex(x, y, (h + 1) & 3), dist[u] + ACTION_COST, u, ACT_RIGHT);
-        relax(stateIndex(x, y, (h + 3) & 3), dist[u] + ACTION_COST, u, ACT_LEFT);
+        relax(stateIndex(x, y, (h + 1) & 3), dist[u] + TURN_STEP, u, ACT_RIGHT);
+        relax(stateIndex(x, y, (h + 3) & 3), dist[u] + TURN_STEP, u, ACT_LEFT);
     }
 }
 
@@ -526,10 +668,38 @@ static void showRoute(unsigned char grid[MAX_MAZE_SIZE][MAX_MAZE_SIZE], int kind
 /* Moving                                                                  */
 /* ====================================================================== */
 
-static void countActions(int n) {
-    if (phase == PHASE_EXPLORE) exploreActions += n;
-    else if (phase == PHASE_RETURN) returnActions += n;
-    else finalActions += n;
+static int actionCost(int act) {
+    return act == ACT_FORWARD ? COST_FORWARD : COST_TURN;
+}
+
+/* Book `n` actions of the given kind against the current phase. */
+static void countActions(int n, int act) {
+    if (phase == PHASE_EXPLORE) {
+        exploreActions += n;
+        exploreCost += n * actionCost(act);
+    } else if (phase == PHASE_RETURN) {
+        returnActions += n;
+        returnCost += n * actionCost(act);
+    } else {
+        finalActions += n;
+        if (act == ACT_FORWARD) finalExecCells += n;
+        else finalExecTurns += n;
+    }
+}
+
+/* How much of the exploration budget is used so far. */
+static int budgetUsed(void) {
+#if EXPLORE_BUDGET_USES_CLOCK
+    return (int)(API_timeMs() - startTimeMs) + TIME_SAFETY_MARGIN;
+#else
+    return exploreCost;
+#endif
+}
+
+static void markDriven(int x, int y, int d) {
+    int nx = x + DX[d], ny = y + DY[d];
+    drivenEdge[x][y][d] = 1;
+    if (inMaze(nx, ny)) drivenEdge[nx][ny][(d + 2) & 3] = 1;
 }
 
 static void doTurn(int act) {
@@ -540,7 +710,7 @@ static void doTurn(int act) {
         API_turnLeft();
         heading = (heading + 3) & 3;
     }
-    countActions(1);
+    countActions(1, act);
 }
 
 /* Drive `n` cells straight ahead. Every side crossed must already be known to
@@ -556,6 +726,7 @@ static bool doForward(int n) {
             phase = PHASE_FAILED;
             return false;
         }
+        markDriven(x, y, heading); /* open for good, whatever a sensor says later */
         x += DX[heading];
         y += DY[heading];
     }
@@ -566,7 +737,8 @@ static bool doForward(int n) {
     }
     posX = x;
     posY = y;
-    countActions(n);
+    if (isGoal(posX, posY)) goalReached = true;
+    countActions(n, ACT_FORWARD);
     return true;
 }
 
@@ -612,7 +784,7 @@ static int returnCostFrom(int x, int y, int h) {
     int c;
     runDijkstra(x, y, h, true);
     c = dist[stateIndex(0, 0, startExitHeading())];
-    return c >= INF_COST ? INF_COST : c / ACTION_COST;
+    return c >= INF_COST ? INF_COST : c / COST_SCALE;
 }
 
 static void endExplore(const char *why) {
@@ -620,9 +792,11 @@ static void endExplore(const char *why) {
     (void)why; /* only used by the log */
     solver_getStats(&st);
     LOG("[explore] done (%s)\n", why);
-    LOG("[explore] cells visited %d/%d (fully mapped %d/%d), actions used %d of budget %d\n",
+    LOG("[explore] cells visited %d/%d (fully mapped %d/%d), %d actions, cost %d of budget %d\n",
         st.visitedCells, st.totalCells, st.mappedCells, st.totalCells, exploreActions,
-        EXPLORE_BUDGET);
+        budgetUsed(), EXPLORE_BUDGET);
+    LOG("[explore] sensor warnings: %d contradictions, %d front-sensor vetoes\n",
+        contradictions, frontVetoes);
     LOG("[explore] best route proven optimal: %s, whole maze mapped: %s\n",
         routeProven ? "yes" : "no", wholeMazeMapped ? "yes" : "no");
     targetX = targetY = -1;
@@ -656,7 +830,7 @@ static void exploreStep(void) {
         endExplore("no route to the goal exists");
         return;
     }
-    optCost = dist[g] / ACTION_COST;
+    optCost = dist[g] / COST_SCALE;
     (void)optCost; /* only used by the log */
     clearGrid(scratchMark);
     clearGrid(candidate);
@@ -678,8 +852,12 @@ static void exploreStep(void) {
     routeProven = (unknownOnRoute == 0);
     if (routeProven && !provenLogged) {
         provenLogged = true;
-        LOG("[explore] best route proven optimal after %d actions: %d actions to run\n",
+        LOG("[explore] best route proven optimal after %d actions: run cost %d\n",
             exploreActions, optCost);
+    }
+    if (routeProven && !EXPLORE_MAP_WHOLE_MAZE) {
+        endExplore("best route proven; whole-maze mapping is switched off");
+        return;
     }
 
     if (routeProven) {
@@ -739,10 +917,10 @@ static void exploreStep(void) {
 
     if (bestX != targetX || bestY != targetY || reason != lastReason ||
         DEBUG_LOG_EVERY_REPLAN) {
-        LOG("[replan] target (%d,%d) because: %s; route estimate %d actions, "
-            "%d unknown walls on it, target %d actions away\n",
+        LOG("[replan] target (%d,%d) because: %s; route estimate cost %d, "
+            "%d unknown walls on it, target is cost %d away\n",
             bestX, bestY, reasonText(reason), optCost, unknownOnRoute,
-            bestCost / ACTION_COST);
+            bestCost / COST_SCALE);
     }
     if (bestX != targetX || bestY != targetY) {
         int ox = targetX, oy = targetY;
@@ -767,18 +945,31 @@ static void exploreStep(void) {
     } else {
         nextH = (heading + 3) & 3;
     }
-    if (goalReached) {
+    if (goalReached || routeProven) { /* a fully known route to the goal exists */
         int back = returnCostFrom(nextX, nextY, nextH);
-        if (back >= INF_COST || exploreActions + 1 + back > EXPLORE_BUDGET) {
+        if (back >= INF_COST || budgetUsed() + actionCost(action) + back > EXPLORE_BUDGET) {
             endExplore("budget reserve for the trip home reached");
             return;
         }
-    } else if (exploreActions + 1 > EXPLORE_BUDGET && !budgetWarned) {
+    } else if (budgetUsed() + actionCost(action) > EXPLORE_BUDGET && !budgetWarned) {
+        /* no known route to the goal yet: keep searching, a run with no goal scores nothing */
         budgetWarned = true;
-        LOG("[warn] budget used up before the goal was found; continuing until it is\n");
+        LOG("[warn] budget used up before a route to the goal was found; continuing until it is\n");
     }
 
     if (action == ACT_FORWARD) {
+#if VERIFY_FRONT_BEFORE_MOVE
+        /* One more look with the front sensor before committing. A side we
+         * have not driven through could still be a missed wall. */
+        if (!drivenEdge[posX][posY][heading] && readWall(SENSE_FRONT)) {
+            frontVetoes++;
+            LOG("[warn] front sensor sees a wall at (%d,%d) side %c that the map says is open\n",
+                posX, posY, DIR_CHAR[heading]);
+            recordSensed(posX, posY, heading, true);
+            refreshDistances();
+            return; /* next step re-plans around it */
+        }
+#endif
         if (!doForward(1)) return;
         senseWalls();
     } else {
@@ -809,13 +1000,13 @@ static void queuePath(int goal) {
 
 static void planReturn(void) {
     int ret[4], run[4], h, bestH = -1, bestTotal = INF_COST;
-    int remaining = EXPLORE_BUDGET - exploreActions;
+    int remaining = EXPLORE_BUDGET - budgetUsed();
 
     /* How far is home for each way of arriving at the start? */
     runDijkstra(posX, posY, heading, true);
     for (h = 0; h < 4; h++) {
         int c = dist[stateIndex(0, 0, h)];
-        ret[h] = (c >= INF_COST) ? INF_COST : c / ACTION_COST;
+        ret[h] = (c >= INF_COST) ? INF_COST : c / COST_SCALE;
     }
     /* And how good is the final run if we start it facing each way? */
     for (h = 0; h < 4; h++) {
@@ -824,7 +1015,7 @@ static void planReturn(void) {
         if (ret[h] >= INF_COST) continue;
         runDijkstra(0, 0, h, true);
         g = bestGoalState();
-        if (g >= 0) run[h] = dist[g] / ACTION_COST;
+        if (g >= 0) run[h] = dist[g] / COST_SCALE;
     }
     /* The final run is worth RUN_WEIGHT times the return trip in the score.
      * Never pick an arrival that doesn't fit in the remaining budget. */
@@ -856,7 +1047,7 @@ static void planReturn(void) {
 
 static void planFinalRun(void) {
     int g, k, cells = 0, turns = 0;
-    runDijkstra(0, 0, heading, true);
+    runDijkstra(posX, posY, heading, true); /* normally the start; elsewhere after a re-plan */
     g = bestGoalState();
     if (g < 0) {
         LOG("[final] no known route to the goal, nothing to run\n");
@@ -871,18 +1062,52 @@ static void planFinalRun(void) {
         if (moveQ[k].kind == ACT_FORWARD) cells += moveQ[k].count;
         else turns++;
     }
-    finalCells = cells;
-    finalTurns = turns;
+    finalCells = finalExecCells + cells;
+    finalTurns = finalExecTurns + turns;
     LOG("[final] route: %d cells, %d turns, %d straights; cost %d actions\n", cells, turns,
         moveQLen - turns, cells + turns);
 }
 
-static void executeMove(const Move *m) {
-    if (m->kind == ACT_FORWARD) {
-        doForward(m->count);
-    } else {
+/* Run one queued move. Returns false if the plan had to be cancelled because
+ * a sensor check found a wall (the caller then re-plans from where we are). */
+static bool executeMove(const Move *m) {
+    if (m->kind != ACT_FORWARD) {
         doTurn(m->kind);
+        return true;
     }
+#if VERIFY_UNDRIVEN_ON_RUNS
+    {
+        int left = m->count;
+        while (left > 0 && phase != PHASE_FAILED) {
+            int run = 0, x = posX, y = posY;
+            /* Sides we have driven through before are certain: no check needed. */
+            while (run < left && drivenEdge[x][y][heading]) {
+                x += DX[heading];
+                y += DY[heading];
+                run++;
+            }
+            if (run > 0) {
+                if (!doForward(run)) return true;
+                left -= run;
+                continue;
+            }
+            if (readWall(SENSE_FRONT)) {
+                frontVetoes++;
+                LOG("[warn] wall found at (%d,%d) side %c on a planned route; re-planning\n",
+                    posX, posY, DIR_CHAR[heading]);
+                recordSensed(posX, posY, heading, true);
+                refreshDistances();
+                return false;
+            }
+            if (!doForward(1)) return true;
+            left--;
+        }
+        return true;
+    }
+#else
+    doForward(m->count);
+    return true;
+#endif
 }
 
 /* ====================================================================== */
@@ -909,7 +1134,10 @@ void solver_init(void) {
 
     for (x = 0; x < MAX_MAZE_SIZE; x++)
         for (y = 0; y < MAX_MAZE_SIZE; y++) {
-            for (d = 0; d < 4; d++) edgeKnow[x][y][d] = EDGE_UNKNOWN;
+            for (d = 0; d < 4; d++) {
+                edgeKnow[x][y][d] = EDGE_UNKNOWN;
+                drivenEdge[x][y][d] = 0;
+            }
             visited[x][y] = 0;
             routeMark[x][y] = 0;
             shownDist[x][y] = -2;
@@ -919,7 +1147,11 @@ void solver_init(void) {
     targetX = targetY = -1;
     lastReason = REASON_NONE;
     exploreActions = returnActions = finalActions = 0;
+    exploreCost = returnCost = 0;
+    contradictions = frontVetoes = 0;
+    startTimeMs = API_timeMs();
     finalCells = finalTurns = 0;
+    finalExecCells = finalExecTurns = 0;
     goalReached = routeProven = wholeMazeMapped = budgetWarned = provenLogged = false;
     moveQLen = moveQPos = 0;
     posX = posY = 0;
@@ -948,9 +1180,13 @@ void solver_init(void) {
     for (x = 0; x < mazeW; x++)
         for (y = 0; y < mazeH; y++) refreshCellColor(x, y);
 
-    LOG("[init] maze %dx%d, goal block x %d..%d y %d..%d, budget %d actions\n", mazeW, mazeH,
-        goalLoX, goalHiX, goalLoY, goalHiY, EXPLORE_BUDGET);
+    LOG("[init] maze %dx%d, goal block x %d..%d y %d..%d, budget %d (cell cost %d, turn cost %d)\n",
+        mazeW, mazeH, goalLoX, goalHiX, goalLoY, goalHiY, EXPLORE_BUDGET, COST_FORWARD,
+        COST_TURN);
     LOG("[phase] EXPLORE\n");
+#if DEBUG_LOG
+    (void)reasonText; /* unused when LOG is redirected to nothing */
+#endif
     phase = PHASE_EXPLORE;
     senseWalls(); /* the start cell: sees its front, left and right walls */
 }
@@ -981,12 +1217,13 @@ bool solver_step(void) {
             planReturn();
             if (phase == PHASE_FAILED) break;
         }
-        if (moveQPos < moveQLen) {
-            executeMove(&moveQ[moveQPos++]);
+        if (moveQPos < moveQLen && !executeMove(&moveQ[moveQPos++])) {
+            moveQLen = moveQPos = 0; /* next step plans the way home again */
+            break;
         }
         if (phase == PHASE_RETURN && moveQPos >= moveQLen) {
-            LOG("[return] done: %d actions (explore + return = %d of budget %d)\n",
-                returnActions, exploreActions + returnActions, EXPLORE_BUDGET);
+            LOG("[return] done: %d actions (explore + return cost %d of budget %d)\n",
+                returnActions, exploreCost + returnCost, EXPLORE_BUDGET);
             phase = PHASE_FINAL;
             moveQLen = moveQPos = 0;
             LOG("[phase] RETURN -> FINAL RUN\n");
@@ -995,17 +1232,18 @@ bool solver_step(void) {
         break;
 
     case PHASE_FINAL:
-        if (moveQPos < moveQLen) {
-            executeMove(&moveQ[moveQPos++]);
+        if (moveQPos < moveQLen && !executeMove(&moveQ[moveQPos++])) {
+            planFinalRun(); /* a wall turned up: plan the rest of the run again */
+            break;
         }
         if (phase == PHASE_FINAL && moveQPos >= moveQLen) {
             SolverStats st;
             solver_getStats(&st);
             LOG("[final] done: ran %d cells with %d turns (%d actions)\n", finalCells,
                 finalTurns, finalActions);
-            LOG("[summary] visited %d/%d cells, explore+return actions %d of budget %d, "
+            LOG("[summary] visited %d/%d cells, explore+return cost %d of budget %d, "
                 "route proven optimal: %s, whole maze mapped: %s\n",
-                st.visitedCells, st.totalCells, exploreActions + returnActions,
+                st.visitedCells, st.totalCells, exploreCost + returnCost,
                 EXPLORE_BUDGET, routeProven ? "yes" : "no", wholeMazeMapped ? "yes" : "no");
             phase = PHASE_DONE;
             LOG("[phase] DONE\n");
@@ -1037,6 +1275,12 @@ void solver_getStats(SolverStats *out) {
     out->visitedCells = countVisited();
     out->mappedCells = countMapped();
     out->exploreActions = exploreActions;
+    out->exploreCost = exploreCost;
+    out->returnCost = returnCost;
+    out->costForward = COST_FORWARD;
+    out->costTurn = COST_TURN;
+    out->contradictions = contradictions;
+    out->frontVetoes = frontVetoes;
     out->returnActions = returnActions;
     out->budget = EXPLORE_BUDGET;
     out->finalCells = finalCells;

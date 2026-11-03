@@ -15,6 +15,7 @@
 #define API_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 /* ---- maze ---- */
 int API_mazeWidth(void);
@@ -24,6 +25,11 @@ int API_mazeHeight(void);
 bool API_wallFront(void);
 bool API_wallRight(void);
 bool API_wallLeft(void);
+
+/* ---- time ---- */
+/* Milliseconds since the program started. On the real mouse this is a hardware
+ * timer. In the simulator it is a modeled clock, because mms moves instantly. */
+uint32_t API_timeMs(void);
 
 /* ---- movement ---- */
 /* Moves forward `distance` cells (>= 1). Returns false if the mouse crashed. */
