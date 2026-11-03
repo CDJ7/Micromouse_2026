@@ -34,7 +34,13 @@ typedef struct {
     int mappedCells;       /* cells whose four walls are all known */
     int exploreActions;    /* turns + cells driven while exploring */
     int returnActions;     /* turns + cells driven on the way back */
-    int budget;            /* exploration budget (explore + return) */
+    int exploreCost;       /* exploration cost, weighted by the action costs */
+    int returnCost;        /* return cost, weighted the same way */
+    int budget;            /* exploration budget (explore + return), in cost units */
+    int costForward;       /* planner cost of one cell */
+    int costTurn;          /* planner cost of one 90-degree turn */
+    int contradictions;    /* sensor readings that disagreed with what we knew */
+    int frontVetoes;       /* moves cancelled because the front sensor saw a wall */
     int finalCells;        /* cells in the final run */
     int finalTurns;        /* turns in the final run */
     bool goalReached;      /* the center was reached at least once */

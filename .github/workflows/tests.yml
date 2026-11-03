@@ -1,0 +1,15 @@
+name: Solver tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  solver-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get the maze collection
+        run: git clone --depth 1 https://github.com/micromouseonline/mazefiles "$RUNNER_TEMP/mazefiles"
+      - name: Run the offline solver tests on every maze that fits
+        run: ./tests/run_tests.sh "$RUNNER_TEMP/mazefiles" --all

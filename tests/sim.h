@@ -43,6 +43,10 @@ typedef struct {
     int turns;
     int resetAtCall;      /* make wasReset() true on this call number (0 = never) */
     int wasResetCalls;
+    int noisePermille;    /* chance in 1/1000 that one wall reading is flipped */
+    unsigned rng;         /* noise generator state */
+    unsigned timeMs;      /* modeled clock, advanced by moves and turns */
+    int sensorFlips;      /* how many readings were flipped */
 } SimState;
 
 SimState *sim_state(void);

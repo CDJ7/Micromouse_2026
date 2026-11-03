@@ -17,6 +17,22 @@
 #define REPLY_BUF_SIZE 64
 #define TEXT_MAX_LEN 10 /* mms limit for cell text */
 
+/* mms moves the mouse instantly, so the clock below is a MODEL of how long a
+ * real mouse would take. These numbers are placeholders for testing the
+ * time-budget logic, not measurements. */
+#ifndef SIM_MS_PER_CELL
+#define SIM_MS_PER_CELL 250
+#endif
+#ifndef SIM_MS_PER_TURN
+#define SIM_MS_PER_TURN 400
+#endif
+
+static uint32_t simClockMs;
+
+uint32_t API_timeMs(void) {
+    return simClockMs;
+}
+
 /* Read one reply line. If the simulator closed the pipe there is nothing left
  * to talk to, so exit instead of spinning forever. */
 static void readLine(char *buf, int size) {
@@ -79,19 +95,25 @@ bool API_wallLeft(void) {
 bool API_moveForward(int distance) {
     printf("moveForward %d\n", distance);
     fflush(stdout);
-    return readAck(); /* "crash" => false */
+    if (readAck()) {
+        simClockMs += (uint32_t)distance * SIM_MS_PER_CELL;
+        return true;
+    }
+    return false; /* "crash" */
 }
 
 void API_turnRight(void) {
     printf("turnRight\n");
     fflush(stdout);
     (void)readAck();
+    simClockMs += SIM_MS_PER_TURN;
 }
 
 void API_turnLeft(void) {
     printf("turnLeft\n");
     fflush(stdout);
     (void)readAck();
+    simClockMs += SIM_MS_PER_TURN;
 }
 
 /* The display commands below have no reply, so there is nothing to read. */
