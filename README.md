@@ -231,10 +231,10 @@ Links Section for Parts when Found.
 | Name | Role |
 | --- | --- |
 | Daniel | Team Captain |
-| Rafael | TBD |
-| Marisol | TBD |
-| Griselda | TBD |
-| Connor | TBD |
+| Rafael | Electrical |
+| Marisol | Electrical |
+| Griselda | Electrical |
+| Connor | Programmer |
 
 <!-- TODO: once roles are set, each team member should fill in their role and a short description of what they worked on. -->
 
