@@ -13,5 +13,12 @@ jobs:
         run: git clone --depth 1 https://github.com/micromouseonline/mazefiles "$RUNNER_TEMP/mazefiles"
       - name: Run the offline solver tests on every maze that fits
         run: ./tests/run_tests.sh "$RUNNER_TEMP/mazefiles" --all
-      - name: Run the real-mouse firmware tests against the simulated mouse
+      - name: Get the ARM compiler and the two CMSIS header repositories
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi
+          mkdir -p "$HOME/cmsis"
+          git clone --depth 1 https://github.com/STMicroelectronics/cmsis_core "$HOME/cmsis/cmsis_core"
+          git clone --depth 1 https://github.com/STMicroelectronics/cmsis_device_f4 "$HOME/cmsis/cmsis_device_f4"
+      - name: Run the real-mouse firmware tests and build the STM32 firmware
         run: ./Real_Mouse_Code/test/run_hw_tests.sh

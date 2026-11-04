@@ -1,59 +1,91 @@
 /*
  * pins.h - which Black Pill pin does what.
  *
- * Only what can be read from the schematics in docs/schematics is filled in.
- * Everything else is marked TBD: the IR sensor, motor driver and encoder
- * schematics are too low resolution to read their net names, and no encoders
- * are drawn yet. Fill these in from the KiCad project, then check each pin
- * against the STM32 datasheet (ADC channel, timer channel, 5 V tolerance).
+ * KNOWN pins come straight from the schematics in docs/schematics.
+ *
+ * PROPOSED pins are NOT from the schematics. The IR, motor and encoder
+ * schematics are too low resolution to read their net names, so these are an
+ * inference: the microcontroller schematic connects exactly 22 pins, 8 of them
+ * are identified above (button, LED, IMU, J5), and the other 14 are exactly
+ * what the rest of the design needs (3 IR receivers + 3 IR emitters + 4 motor
+ * inputs + 4 encoder inputs). The proposal gives each of those 14 pins a job
+ * that its timer or ADC can actually do on the STM32F411.
+ *
+ * ==> Compare the PROPOSED table below with the KiCad schematic and edit the
+ *     lines that differ. Each pin is one line. Then define PINS_CONFIRMED (in the
+ *     Makefile or here) to silence the warning at build time.
  */
 #ifndef PINS_H
 #define PINS_H
 
-/* ---- known from the schematics ---- */
+#include "stm32f4xx.h"
 
-/* Start button SW2: between PB12 and ground, so use the internal pull-up and
- * read it as pressed when the pin is LOW. */
-#define PIN_BUTTON_PORT 'B'
-#define PIN_BUTTON_NUM 12
+/* ============================ KNOWN ============================ */
 
-/* Black Pill on-board LED. On most Black Pill boards it is active LOW (the LED
- * lights when the pin is low): verify on the actual board. */
-#define PIN_LED_PORT 'C'
-#define PIN_LED_NUM 13
+/* Start button SW2 between PB12 and ground: internal pull-up, pressed = LOW. */
+#define PIN_BUTTON GPIOB, 12
 
-/* BNO055 IMU breakout (I2C). ADR is left unconnected on the schematic, which
- * should give the default I2C address 0x28: verify in the breakout's guide. */
-#define PIN_IMU_SCL_PORT 'B'
-#define PIN_IMU_SCL_NUM 8
-#define PIN_IMU_SDA_PORT 'B'
-#define PIN_IMU_SDA_NUM 9
-#define PIN_IMU_INT_PORT 'A'
-#define PIN_IMU_INT_NUM 11 /* WARNING: PA11 and PA12 are the USB D- / D+ pins on the Black Pill. */
-#define PIN_IMU_RST_PORT 'A'
-#define PIN_IMU_RST_NUM 12 /* Using them for the IMU means USB cannot be used on this board. */
+/* Black Pill on-board LED: active LOW on most boards (verify on yours). */
+#define PIN_LED GPIOC, 13
 
-/* 6-pin header J5: pin 2 = 5 V, pin 3 = GND, pin 4 = PA3, pin 5 = PA2 (these two
- * are the USART2 RX / TX pins). What the header is for is not decided yet; a
- * serial port for hal_log() is the obvious use. */
-#define PIN_J5_PA3_PORT 'A'
-#define PIN_J5_PA3_NUM 3
-#define PIN_J5_PA2_PORT 'A'
-#define PIN_J5_PA2_NUM 2
+/* BNO055 IMU breakout on I2C1 (alternate pins, AF4). ADR is left unconnected on
+ * the schematic, which should give I2C address 0x28 (verify in the breakout's
+ * guide). WARNING: PA11 and PA12 are the Black Pill's USB D- / D+ pins. Using
+ * them for the IMU means the USB bootloader (DFU) cannot be used: flash with an
+ * ST-Link on the SWD pins instead. */
+#define PIN_IMU_SCL GPIOB, 8
+#define PIN_IMU_SDA GPIOB, 9
+#define PIN_IMU_INT GPIOA, 11 /* not used by the firmware yet */
+#define PIN_IMU_RST GPIOA, 12 /* active low */
+#define IMU_I2C_ADDRESS 0x28
 
-/* ---- TBD: read these from the KiCad project ---- */
+/* Header J5 pin 5 = PA2, pin 4 = PA3: USART2 TX / RX. Used for hal_log(). */
+#define PIN_UART_TX GPIOA, 2
+#define PIN_UART_RX GPIOA, 3
 
-/* IR emitters: three plain GPIO outputs (front center, left, right).
- *   PIN_IR_EMITTER_FRONT / _LEFT / _RIGHT      TBD
- * IR receivers: three ADC inputs. On the STM32F411, ADC1 inputs 0..7 are PA0..PA7.
- *   PIN_IR_RECEIVER_FRONT / _LEFT / _RIGHT     TBD (the schematic shows PA nets)
- * Motor driver (dual H-bridge): per motor, a PWM pin from a timer channel and a
- * direction or second-input pin.
- *   PIN_MOTOR_LEFT_PWM / _DIR, PIN_MOTOR_RIGHT_PWM / _DIR    TBD
- * Encoders: none are drawn in the schematics yet. Each needs two pins on a
- * timer that supports encoder mode (for example TIM2 / TIM3 / TIM4 channels 1 and
- * 2). Without encoders the mouse cannot measure distance.
- *   PIN_ENC_LEFT_A / _B, PIN_ENC_RIGHT_A / _B                TBD
- */
+/* ========================== PROPOSED ========================== */
+
+/* IR receivers (phototransistors): ADC1 inputs. PA1 = channel 1, PA4 = channel
+ * 4, PA5 = channel 5 (on the F411, PA0..PA7 are ADC1 channels 0..7). */
+#define PIN_IR_RX_FRONT GPIOA, 4
+#define IR_RX_FRONT_CHANNEL 4
+#define PIN_IR_RX_LEFT GPIOA, 5
+#define IR_RX_LEFT_CHANNEL 5
+#define PIN_IR_RX_RIGHT GPIOA, 1
+#define IR_RX_RIGHT_CHANNEL 1
+
+/* IR emitters: plain GPIO outputs, high = LED on. */
+#define PIN_IR_TX_FRONT GPIOA, 6
+#define PIN_IR_TX_LEFT GPIOA, 7
+#define PIN_IR_TX_RIGHT GPIOA, 10
+
+/* Dual H-bridge, two inputs per motor (the DRV8833 style: forward = PWM on
+ * input 1 with input 2 low, reverse = the other way round). If the driver is the
+ * PWM + direction style instead, hal_motor_set() has to change.
+ *   left motor : TIM1 CH1 on PA8 (AF1), TIM1 CH2 on PA9 (AF1)
+ *   right motor: TIM2 CH1 on PA15 (AF1), TIM2 CH2 on PB3 (AF1)
+ * (PA15 and PB3 are JTAG pins at reset; SWD on PA13/PA14 is left alone.) */
+#define PIN_MOTOR_L_IN1 GPIOA, 8
+#define PIN_MOTOR_L_IN2 GPIOA, 9
+#define PIN_MOTOR_R_IN1 GPIOA, 15
+#define PIN_MOTOR_R_IN2 GPIOB, 3
+/* 1 if a wheel's motor is wired so that positive power turns it backwards. */
+#define MOTOR_L_REVERSED 0
+#define MOTOR_R_REVERSED 0
+
+/* Quadrature encoders on timers in encoder mode (A = channel 1, B = channel 2).
+ *   left : TIM3 on PB4 (A), PB5 (B), AF2
+ *   right: TIM4 on PB6 (A), PB7 (B), AF2 */
+#define PIN_ENC_L_A GPIOB, 4
+#define PIN_ENC_L_B GPIOB, 5
+#define PIN_ENC_R_A GPIOB, 6
+#define PIN_ENC_R_B GPIOB, 7
+/* 1 if a wheel's encoder counts down when the wheel rolls forward. */
+#define ENC_L_REVERSED 0
+#define ENC_R_REVERSED 0
+
+#ifndef PINS_CONFIRMED
+#warning "pins.h: the IR, motor and encoder pins are PROPOSED, not read from the schematic. Check them, then define PINS_CONFIRMED."
+#endif
 
 #endif /* PINS_H */
