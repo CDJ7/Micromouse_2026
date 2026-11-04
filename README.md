@@ -242,8 +242,6 @@ Links Section for Parts when Found.
 | --- | --- |
 | Daniel | Team Captain |
 | Rafael | Electrical |
-| Marisol | Electrical |
-| Griselda | Electrical |
 | Connor | Programmer |
 
 <!-- TODO: once roles are set, each team member should fill in their role and a short description of what they worked on. -->
