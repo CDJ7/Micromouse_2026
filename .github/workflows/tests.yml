@@ -13,3 +13,5 @@ jobs:
         run: git clone --depth 1 https://github.com/micromouseonline/mazefiles "$RUNNER_TEMP/mazefiles"
       - name: Run the offline solver tests on every maze that fits
         run: ./tests/run_tests.sh "$RUNNER_TEMP/mazefiles" --all
+      - name: Run the real-mouse firmware tests against the simulated mouse
+        run: ./Real_Mouse_Code/test/run_hw_tests.sh

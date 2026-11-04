@@ -140,21 +140,38 @@
 #define DIST_DISPLAY_FLOOD 1
 #endif
 
-/* Debug display switches (1 = on, 0 = off). Turn them off on the real mouse. */
-#define DEBUG_SHOW_DISTANCES     1 /* distance text in every cell           */
-#define DEBUG_SHOW_WALLS         1 /* setWall for every discovered wall     */
-#define DEBUG_SHOW_START_GOAL    1 /* start and goal cell colors            */
-#define DEBUG_SHOW_VISITED       1 /* color cells the mouse has visited     */
+/* Debug display switches (1 = on, 0 = off). Turn them off on the real mouse
+ * (e.g. -DDEBUG_SHOW_WALLS=0). */
+#ifndef DEBUG_SHOW_DISTANCES
+#define DEBUG_SHOW_DISTANCES 1 /* distance text in every cell           */
+#endif
+#ifndef DEBUG_SHOW_WALLS
+#define DEBUG_SHOW_WALLS 1 /* setWall for every discovered wall     */
+#endif
+#ifndef DEBUG_SHOW_START_GOAL
+#define DEBUG_SHOW_START_GOAL 1 /* start and goal cell colors            */
+#endif
+#ifndef DEBUG_SHOW_VISITED
+#define DEBUG_SHOW_VISITED 1 /* color cells the mouse has visited     */
+#endif
+#ifndef DEBUG_SHOW_PLANNED_ROUTE
 #define DEBUG_SHOW_PLANNED_ROUTE 1 /* highlight the currently planned route */
-#define DEBUG_SHOW_TARGET        1 /* highlight the exploration target      */
-#define DEBUG_SHOW_FINAL_ROUTE   1 /* highlight the final route             */
+#endif
+#ifndef DEBUG_SHOW_TARGET
+#define DEBUG_SHOW_TARGET 1 /* highlight the exploration target      */
+#endif
+#ifndef DEBUG_SHOW_FINAL_ROUTE
+#define DEBUG_SHOW_FINAL_ROUTE 1 /* highlight the final route             */
+#endif
 
 /* Log to stderr (the mms "Run Output" tab). */
 #ifndef DEBUG_LOG
 #define DEBUG_LOG 1
 #endif
 /* 1 = log every re-plan, 0 = only when the target cell changes. */
+#ifndef DEBUG_LOG_EVERY_REPLAN
 #define DEBUG_LOG_EVERY_REPLAN 0
+#endif
 
 /* ====================================================================== */
 /* Constants and types                                                     */
@@ -267,13 +284,11 @@ static int floodDist[MAX_MAZE_SIZE][MAX_MAZE_SIZE];
 #endif
 
 enum { REASON_NONE, REASON_CHECK_ROUTE, REASON_MAP_NEAREST };
-#if DEBUG_LOG
 static const char *reasonText(int r) {
     if (r == REASON_CHECK_ROUTE) return "unknown wall on the best route";
     if (r == REASON_MAP_NEAREST) return "nearest unexplored cell";
     return "none";
 }
-#endif
 
 /* ====================================================================== */
 /* Small helpers                                                           */
@@ -1184,9 +1199,7 @@ void solver_init(void) {
         mazeW, mazeH, goalLoX, goalHiX, goalLoY, goalHiY, EXPLORE_BUDGET, COST_FORWARD,
         COST_TURN);
     LOG("[phase] EXPLORE\n");
-#if DEBUG_LOG
-    (void)reasonText; /* unused when LOG is redirected to nothing */
-#endif
+    (void)reasonText; /* only used by the log, which may be switched off */
     phase = PHASE_EXPLORE;
     senseWalls(); /* the start cell: sees its front, left and right walls */
 }

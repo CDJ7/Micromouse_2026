@@ -48,8 +48,9 @@ build() { # name extra-flags
   gcc $CFLAGS $2 -Dmain=mms_main -c "$SRC/main.c" -o "$OUT/main_$1.o"
   gcc $CFLAGS $2 -c "$SRC/solver.c" -o "$OUT/solver_$1.o"
   gcc $CFLAGS $2 -c "$HERE/sim_api.c" -o "$OUT/sim_api_$1.o"
+  gcc $CFLAGS -c "$HERE/sim_maze.c" -o "$OUT/sim_maze_$1.o"
   gcc $CFLAGS -c "$HERE/test_main.c" -o "$OUT/test_main_$1.o"
-  gcc -o "$OUT/runner_$1" "$OUT/main_$1.o" "$OUT/solver_$1.o" "$OUT/sim_api_$1.o" "$OUT/test_main_$1.o"
+  gcc -o "$OUT/runner_$1" "$OUT/main_$1.o" "$OUT/solver_$1.o" "$OUT/sim_api_$1.o" "$OUT/sim_maze_$1.o" "$OUT/test_main_$1.o"
 }
 SMALL_BUDGET="${SMALL_BUDGET:-300}"
 build default ""

@@ -13,6 +13,7 @@ Needs `gcc` and `python3`. The optional argument is a clone of
 | --- | --- |
 | `run_tests.sh` | Builds everything with `-Wall -Wextra -pedantic` and runs all checks |
 | `sim_api.c`, `sim.h` | Fake `API.h` backed by a maze file; records every move and validates display calls |
+| `sim_maze.c` | Loads a maze file (also used by the real-mouse tests in `Real_Mouse_Code/test`) |
 | `test_main.c` | The checks below, plus an independent shortest-route oracle |
 | `mock_mms.py` | Runs the real `a.out` against a mock of the mms stdin/stdout protocol (tests `API.c`) |
 | `gen_maze.py` | Generates the 8×8 and 10×10 mazes in `mazes/` |
