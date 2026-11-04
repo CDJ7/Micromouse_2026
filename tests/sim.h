@@ -21,6 +21,7 @@ typedef struct {
 /* Load .num, or the ASCII .map / mazefiles text format. Returns 0 on success. */
 int sim_load(const char *path);
 const SimMaze *sim_maze(void);
+extern SimMaze sim_mazeData; /* the loaded maze */
 
 /* Everything the mouse did, one entry per turn or per cell driven. */
 typedef struct {
