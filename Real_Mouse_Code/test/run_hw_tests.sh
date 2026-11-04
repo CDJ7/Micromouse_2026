@@ -35,9 +35,21 @@ cc -c "$SRC/ir_sensors.c" -o "$OUT/ir_sensors.o"
 cc -c "$TESTS/sim_maze.c" -o "$OUT/sim_maze.o"
 cc -c "$HERE/test_hw.c" -o "$OUT/test_hw.o"
 cc -c "$HERE/fake_hal.c" -o "$OUT/fake_hal.o"
-# The STM32 HAL skeleton has to keep matching hal.h.
-gcc -std=c99 -Wall -Wextra -pedantic -fsyntax-only -I"$RM/include" "$RM/hal_stm32/hal_stm32.c"
-echo "PASS: hal_stm32/hal_stm32.c skeleton matches hal.h"
+# The pure arithmetic inside the STM32 HAL (yaw unwrapping, encoder counters, PWM scaling).
+gcc -std=c99 -Wall -Wextra -pedantic -o "$OUT/test_hal_logic" "$HERE/test_hal_logic.c" "$RM/hal_stm32/hal_logic.c" -lm
+"$OUT/test_hal_logic" | grep -E 'FAIL|ALL HAL'
+"$OUT/test_hal_logic" >/dev/null
+echo "PASS: hal_logic arithmetic"
+
+# The real STM32 firmware must still build (compile and link only; it cannot run on a PC).
+CMSIS_CORE="${CMSIS_CORE:-$HOME/cmsis/cmsis_core}"
+CMSIS_DEVICE_F4="${CMSIS_DEVICE_F4:-$HOME/cmsis/cmsis_device_f4}"
+if command -v arm-none-eabi-gcc >/dev/null 2>&1 && [ -d "$CMSIS_CORE" ] && [ -d "$CMSIS_DEVICE_F4" ]; then
+  (cd "$RM" && make clean >/dev/null && make CMSIS_CORE="$CMSIS_CORE" CMSIS_DEVICE_F4="$CMSIS_DEVICE_F4" 2>&1 | tail -3)
+  [ -f "$RM/build/mouse.bin" ] && echo "PASS: STM32 firmware builds and links (Cortex-M4)"
+else
+  echo "SKIP: STM32 firmware build (needs arm-none-eabi-gcc and the two CMSIS folders, see Real_Mouse_Code/Makefile)"
+fi
 gcc -o "$OUT/test_hw" "$OUT"/solver.o "$OUT"/main_hw.o "$OUT"/api_hw.o "$OUT"/motion.o "$OUT"/ir_sensors.o \
     "$OUT"/fake_hal.o "$OUT"/test_hw.o "$OUT"/sim_maze.o -lm
 # The same firmware against a worse mouse: noisier sensors, bigger encoder and gyro errors, slower motors.

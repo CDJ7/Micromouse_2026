@@ -3,14 +3,14 @@
 A team Micromouse project: a maze-solving robot whose solver is written in C. The solver is developed and tested in the [Micromouse Simulator (mms)](https://github.com/mackorone/mms) and runs on a physical mouse in a 10×10 maze. The simulator uses a 16×16 maze.
 
 > [!NOTE]
-> **Work in progress.** The simulation solver is complete and heavily tested. The firmware for the real mouse is written and tested on a PC against a simulated mouse, but the low-level hardware drivers are still to come and nothing has run on a physical mouse yet. The PCB is still being designed.
+> **Work in progress.** The simulation solver is complete and heavily tested. The firmware for the real mouse is written and tested on a PC against a simulated mouse, and the STM32 drivers build for the Black Pill, but nothing has run on a physical mouse yet. The PCB is still being designed.
 
 | Part of the project | Status |
 | --- | --- |
 | Maze solver for mms | Complete. Tested on 532 mazes, always finds the cheapest route in the maze |
 | Offline tests and GitHub Actions | Complete |
 | Real-mouse firmware (sensors, motion, start-up) | Written and tested on a PC. Not yet run on hardware |
-| STM32 hardware drivers | Not started (skeleton only) |
+| STM32 hardware drivers | Written and building for the Black Pill. Never run on a board. IR, motor and encoder pins are a proposal to check against the schematic |
 | Schematics and PCB | Schematics below. PCB layout in progress |
 
 ---
@@ -150,7 +150,8 @@ The repository is split into simulation code and code for the real mouse.
 | `Real_Mouse_Code/` | **Real mouse code.** Reuses `MMS_Code/solver.c` unchanged. See [`Real_Mouse_Code/README.md`](Real_Mouse_Code/README.md). |
 | `Real_Mouse_Code/src/` | Motion control, IR wall sensing, the hardware version of the API and the start-up sequence. |
 | `Real_Mouse_Code/include/` | The hardware interface (`hal.h`) and the robot numbers to measure and tune (`config.h`). |
-| `Real_Mouse_Code/hal_stm32/` | Black Pill pin list and the driver skeleton (to be written). |
+| `Real_Mouse_Code/hal_stm32/` | STM32 drivers (clocks, PWM, encoders, ADC, I2C and the BNO055, serial), the pin list, the linker script and the arithmetic that is tested on a PC. |
+| `Real_Mouse_Code/Makefile` | Builds the firmware with `arm-none-eabi-gcc`. |
 | `Real_Mouse_Code/test/` | A simulated mouse and PC tests for the real-mouse firmware. |
 | `tests/` | Offline tests for the solver (not part of the mms build): fake simulator, maze loader, generated test mazes, maze generator and `run_tests.sh`. See [`tests/README.md`](tests/README.md). |
 | `.github/workflows/` | Runs both sets of tests on every push and pull request. |
@@ -239,7 +240,7 @@ MMS_Code/solver.c          the solver, unchanged
         |  API.h
 Real_Mouse_Code/src/       wall sensing, straights, turns, start-up
         |  hal.h
-hal_stm32/                 Black Pill drivers (still to write)
+hal_stm32/                 Black Pill drivers (written, not yet run on a board)
 ```
 
 What exists so far:
@@ -250,7 +251,9 @@ What exists so far:
 - **Start-up and calibration** in the start cell, with fail-safes (an uncalibrated sensor reports a wall, a stalled or slow move stops the motors).
 - **A simulated mouse** that all of this is tested against on a PC: 6 of 6 generated 10×10 mazes pass every check, including with noisier sensors and larger encoder and gyro errors.
 
-Still to do: the STM32 drivers, the pin assignments for the IR sensors, motors and encoders, and measuring the real numbers in `config.h`. The full status, bring-up plan and known risks are in [`Real_Mouse_Code/README.md`](Real_Mouse_Code/README.md).
+- **STM32 drivers** for the Black Pill: 100 MHz clock, 1 kHz tick, motor PWM, encoder timers, the IR sensors on the ADC, the BNO055 over I2C and serial debug output. They build and link with `arm-none-eabi-gcc` (about 19 KB of flash and 23 KB of RAM) but have never run on a board.
+
+Still to do: check the proposed IR, motor and encoder pins against the schematic, bring the drivers up on a real board, and measure the real numbers in `config.h`. The full status, build steps, pin table, bring-up plan and known risks are in [`Real_Mouse_Code/README.md`](Real_Mouse_Code/README.md).
 
 ---
 

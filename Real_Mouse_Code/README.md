@@ -3,7 +3,7 @@
 Firmware for the physical micromouse (STM32 Black Pill). It reuses the maze solver from [`../MMS_Code`](../MMS_Code) **unchanged** and adds everything the real robot needs: reading the IR wall sensors, driving the motors, using the IMU, and starting up safely.
 
 > [!NOTE]
-> **Work in progress.** Everything except the lowest layer (the STM32 register-level drivers) is written and tested on a PC against a simulated mouse. Nothing has run on real hardware yet, and the numbers in [`include/config.h`](include/config.h) are placeholders until the mouse is built and measured.
+> **Work in progress.** All of it is written. Everything above the register-level drivers is tested on a PC against a simulated mouse, and the STM32 drivers build and link for the Black Pill but have never run on a board. The numbers in [`include/config.h`](include/config.h) are placeholders until the mouse is built and measured, and the IR, motor and encoder pins are a proposal that has to be checked against the schematic.
 
 ---
 
@@ -11,6 +11,8 @@ Firmware for the physical micromouse (STM32 Black Pill). It reuses the maze solv
 
 - [How it fits together](#how-it-fits-together)
 - [What is done](#what-is-done)
+- [Building the firmware](#building-the-firmware)
+- [Pins](#pins)
 - [How the mouse drives](#how-the-mouse-drives)
 - [Testing without hardware](#testing-without-hardware)
 - [Solver settings for the real mouse](#solver-settings-for-the-real-mouse)
@@ -32,7 +34,7 @@ src/api_hw.c             wall sensing, moves, turns, clock
 src/ir_sensors.c         wall detection and distances from the IR sensors
 src/motion.c             straights and 90-degree turns
         |  include/hal.h
-hal_stm32/hal_stm32.c    Black Pill drivers (still to write)
+hal_stm32/hal_stm32.c    Black Pill drivers (written, not yet run on a board)
 test/fake_hal.c          a simulated mouse, used to test everything above on a PC
 ```
 
@@ -50,9 +52,60 @@ Because the layers only talk through `hal.h`, the same firmware code runs on the
 | Motion: speed profile, heading hold, corridor centering, turns, stall detection | `src/motion.c` | Written, tested on PC |
 | API for the solver | `src/api_hw.c` | Written, tested on PC |
 | Start-up: wait for button, calibrate in the start cell, run, stop | `src/main_hw.c` | Written, tested on PC |
-| Pin list from the schematics | `hal_stm32/pins.h` | Partly filled in (IR, motor and encoder pins are TBD) |
-| STM32 drivers | `hal_stm32/hal_stm32.c` | **Skeleton only**, every function is a documented TODO |
+| Pin list | `hal_stm32/pins.h` | Button, LED, IMU and serial pins are from the schematics. IR, motor and encoder pins are **proposed**, see [Pins](#pins) |
+| STM32 drivers: clocks, 1 kHz tick, PWM, encoders, ADC, I2C and the BNO055, serial | `hal_stm32/hal_stm32.c` | Written, builds and links. **Never run on a board** |
+| Driver arithmetic (yaw unwrapping, encoder widening, PWM scaling) | `hal_stm32/hal_logic.c` | Written, tested on PC |
+| Build for the Black Pill | `Makefile`, `hal_stm32/stm32f411ce.ld`, `solver_flags.mk` | Written, builds `mouse.elf` and `mouse.bin` |
 | Simulated mouse and tests | `test/` | Written |
+
+---
+
+## Building the firmware
+
+The build uses plain `arm-none-eabi-gcc` and the CMSIS device headers; there is no vendor HAL library and no IDE project.
+
+```
+sudo apt install gcc-arm-none-eabi libnewlib-arm-none-eabi
+git clone https://github.com/STMicroelectronics/cmsis_core         ~/cmsis/cmsis_core
+git clone https://github.com/STMicroelectronics/cmsis_device_f4    ~/cmsis/cmsis_device_f4
+cd Real_Mouse_Code
+make          # builds build/mouse.elf and build/mouse.bin
+make flash    # writes it with an ST-Link (needs st-flash)
+```
+
+The build prints a warning that the IR, motor and encoder pins are proposed. It goes away with `make PINS=confirmed` once they have been checked. The solver is compiled from `../MMS_Code/solver.c` with the settings in `solver_flags.mk`.
+
+Size: about 18.7 KB of the 512 KB flash and 22.5 KB of the 128 KB RAM, including the solver and its map.
+
+> [!WARNING]
+> Flash with an **ST-Link on the SWD pins**. The Black Pill's built-in USB bootloader needs the USB pins PA11 and PA12, and the schematic uses those for the IMU.
+
+---
+
+## Pins
+
+Known from the schematics:
+
+| Signal | Pin |
+| --- | --- |
+| Start button SW2 (to ground, pressed = low) | PB12 |
+| On-board LED | PC13 |
+| IMU I2C clock / data | PB8 / PB9 |
+| IMU interrupt / reset | PA11 / PA12 (the USB pins) |
+| Serial debug output (header J5) | PA2 (TX), PA3 (RX) |
+
+The IR, motor and encoder schematics are too low resolution to read, so those pins are **inferred, not read**. The microcontroller schematic connects exactly 22 pins. Eight are identified above, and the other 14 are exactly what the rest of the design needs: 3 IR receivers, 3 IR emitters, 4 motor inputs and 4 encoder inputs. The proposal gives each pin a job that its timer or ADC can really do on the STM32F411:
+
+| Signal | Proposed pin | Peripheral |
+| --- | --- | --- |
+| IR receiver front / left / right | PA4 / PA5 / PA1 | ADC1 channels 4 / 5 / 1 |
+| IR emitter front / left / right | PA6 / PA7 / PA10 | GPIO output |
+| Left motor inputs 1 / 2 | PA8 / PA9 | TIM1 channels 1 / 2 (PWM) |
+| Right motor inputs 1 / 2 | PA15 / PB3 | TIM2 channels 1 / 2 (PWM) |
+| Left encoder A / B | PB4 / PB5 | TIM3 encoder mode |
+| Right encoder A / B | PB6 / PB7 | TIM4 encoder mode |
+
+**Compare this table with the KiCad schematic and edit the lines that differ in `hal_stm32/pins.h` (one line per pin).** Anything wired differently from this will not work. Two more assumptions to check: the motor driver takes two inputs per motor (forward = PWM on input 1, reverse = PWM on input 2), and the IR receivers are read by the ADC rather than a comparator.
 
 ---
 
@@ -111,16 +164,15 @@ The solver is configured with compile flags (see the settings at the top of `MMS
 ## What is still needed
 
 **Decisions**
-- Toolchain: PlatformIO, STM32CubeIDE, or plain `arm-none-eabi-gcc`.
-- Whether the mouse has **encoders**. None are in the schematics, and without them it cannot measure distance.
+- Toolchain: the build uses plain `arm-none-eabi-gcc`. It can be wrapped in PlatformIO or STM32CubeIDE if the team prefers.
+- Whether the mouse has **encoders**. None are drawn in the schematics (the 14-pin count above suggests four encoder pins exist), and without encoders the mouse cannot measure distance.
 - Exact STM32 part, motor driver part, motors, encoders and IR emitter/receiver parts.
 
 **Measurements for `include/config.h`** (every value marked TBD): cell pitch of the real maze, encoder ticks per mm, wheel speed at full power, controller gains, motor dead zone, IR settle time, sensor-to-wall distances when centered.
 
-**Code**
-- `hal_stm32/hal_stm32.c`: clocks, 1 kHz tick, GPIO, ADC, PWM, encoder timers, the BNO055 over I2C, serial output.
-- The real pin numbers in `hal_stm32/pins.h` (needs readable IR, motor and encoder schematics).
-- A build for the Black Pill (depends on the toolchain).
+**Checking the drivers on a board.** `hal_stm32.c` was written from the STM32F411 and BNO055 documentation and compile-checked only. Expect to debug it during bring-up: the I2C sequences, the BNO055 heading sign and units, the PWM and encoder pin modes, the ADC sample time.
+
+**Pins.** Confirm the proposed IR, motor and encoder pins against the schematic (see [Pins](#pins)).
 
 ---
 
@@ -128,7 +180,7 @@ The solver is configured with compile flags (see the settings at the top of `MMS
 
 Do these in order on the real mouse, testing each before the next.
 
-1. Serial output (`hal_log`) and the LED and button.
+1. Build and flash with an ST-Link. Serial output (`hal_log`) on header J5, the LED and the button.
 2. Motors, wheels off the ground: both directions, power against speed, dead zone.
 3. Encoders: ticks per mm, direction.
 4. BNO055: heading, sign, unwrapping, update rate.
@@ -144,7 +196,9 @@ Do these in order on the real mouse, testing each before the next.
 
 - **The IMU pins clash with USB.** The schematic puts the BNO055's INT and RST on PA11 and PA12, which are the Black Pill's USB pins, so USB cannot be used on this board. Moving them before the PCB is made would avoid that.
 - **No encoders in the schematics.** See above.
-- **The IMU update rate.** The BNO055 produces new fusion data at up to 100 Hz, while the control loop runs at 1 kHz. The HAL will need to interpolate or the turn controller must tolerate it.
+- **The IMU update rate.** The BNO055 produces new fusion data at up to 100 Hz, while the control loop runs at 1 kHz. The driver reads it every 10 ms and extrapolates between readings (tested on PC), but how well that works for the turn controller is untested.
+- **The drivers have never run.** The BNO055 heading sign and units, the I2C address (0x28 assumed), the LED polarity and the motor driver type are all assumptions from documentation.
+- **The control loop has no timing margin check.** It assumes each loop finishes within the 1 ms tick; a slow I2C read or log line would stretch it.
 - **The planner prices every cell the same.** On the real mouse, multi-cell straights run faster than one cell, so the planner slightly overestimates their cost. It still finds a good route, but not exactly the fastest in time.
 - **The mouse stops in every cell while exploring.** That is simple and safe, but slow. Continuous exploration would be a later improvement.
 - **Assumptions about the start.** The mouse is placed in the center of the start cell facing the exit, and the start cell has walls on its left, right and back.
